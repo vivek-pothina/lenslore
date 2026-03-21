@@ -740,8 +740,11 @@ export default function App() {
 
   const renderPlanning = () => {
     const hasContent = parsed && (parsed.title || parsed.summary || parsed.stops?.length);
-    const showSpinner = streaming && !hasContent;
+    const isThinking = streaming && !hasContent && completion.length > 0;
+    const showSpinner = streaming && !hasContent && !isThinking;
     const showContent = hasContent;
+
+    const streamingSnippet = completion.length > 0 ? completion.slice(-400) : "";
 
     return (
       <motion.div
@@ -767,18 +770,76 @@ export default function App() {
               />
             </div>
             <div className="text-center space-y-2">
-              <p
-                className="text-lg font-medium"
-                style={{ color: t.accent }}
-              >
+              <p className="text-lg font-medium" style={{ color: t.accent }}>
                 Consulting the Oracle...
               </p>
-              <p
-                className="text-sm font-mono uppercase"
-                style={{ color: t.muted }}
-              >
+              <p className="text-sm font-mono uppercase" style={{ color: t.muted }}>
                 Forging your path
               </p>
+            </div>
+          </div>
+        )}
+
+        {isThinking && (
+          <div className="space-y-6 pt-4">
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <motion.div
+                  animate={{ scale: [1, 1.2, 1] }}
+                  transition={{ duration: 1.5, repeat: Infinity }}
+                  className="size-3 rounded-full"
+                  style={{ backgroundColor: t.accent, boxShadow: `0 0 12px ${t.accentGlow}` }}
+                />
+              </div>
+              <div>
+                <p className="text-sm font-medium" style={{ color: t.accent }}>
+                  The Oracle is speaking...
+                </p>
+                <p className="text-xs" style={{ color: t.muted }}>
+                  Manifesting your adventure
+                </p>
+              </div>
+            </div>
+
+            <div
+              className="rounded-xl border overflow-hidden"
+              style={{ backgroundColor: "#0a0a0f", borderColor: t.border }}
+            >
+              <div
+                className="flex items-center gap-2 px-4 py-2 border-b"
+                style={{ borderColor: t.border }}
+              >
+                <div className="flex gap-1.5">
+                  <div className="size-2 rounded-full bg-red-500/60" />
+                  <div className="size-2 rounded-full bg-yellow-500/60" />
+                  <div className="size-2 rounded-full bg-green-500/60" />
+                </div>
+                <span className="text-[10px] font-mono uppercase" style={{ color: t.muted }}>
+                  oracle.stream
+                </span>
+              </div>
+              <div className="p-4 font-mono text-xs leading-relaxed max-h-[50vh] overflow-y-auto">
+                <pre
+                  className="whitespace-pre-wrap break-words"
+                  style={{ color: `${t.foreground}cc` }}
+                >
+                  {streamingSnippet}
+                </pre>
+                <motion.span
+                  animate={{ opacity: [1, 0] }}
+                  transition={{ duration: 0.6, repeat: Infinity }}
+                  className="inline-block w-2 h-4 ml-0.5 align-middle"
+                  style={{ backgroundColor: t.accent }}
+                />
+              </div>
+            </div>
+
+            <div
+              className="flex items-center gap-2 text-xs font-mono uppercase tracking-widest justify-center"
+              style={{ color: t.muted }}
+            >
+              <Loader2 size={12} className="animate-spin" />
+              <span>{completion.length} chars received</span>
             </div>
           </div>
         )}
@@ -1119,6 +1180,44 @@ export default function App() {
           <p className="text-lg font-serif leading-relaxed italic">
             &ldquo;{sp?.lore || "The oracle speaks..."}&rdquo;
           </p>
+
+          {ttsMutation.isPending && !sp?.audioUrl && (
+            <div
+              className="rounded-xl border p-4 flex items-center gap-4"
+              style={{ backgroundColor: "rgba(9,9,11,0.6)", borderColor: t.border }}
+            >
+              <div
+                className="size-10 rounded-full flex items-center justify-center shrink-0"
+                style={{ backgroundColor: t.accentLight }}
+              >
+                <Loader2 size={16} className="animate-spin" style={{ color: t.accent }} />
+              </div>
+              <div className="flex-1 space-y-2">
+                <div
+                  className="h-2 rounded-full overflow-hidden"
+                  style={{ backgroundColor: t.border }}
+                >
+                  <motion.div
+                    className="h-full rounded-full"
+                    style={{
+                      background: `linear-gradient(90deg, transparent, ${t.accent}40, transparent)`,
+                      width: "60%",
+                    }}
+                    animate={{ x: ["-100%", "200%"] }}
+                    transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
+                  />
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[10px] font-mono" style={{ color: t.muted }}>
+                    Conjouring voice...
+                  </span>
+                  <span className="text-[10px] font-mono tabular-nums" style={{ color: t.accent, opacity: 0.5 }}>
+                    0:00
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
 
           {sp?.audioUrl && (
             <AudioPlayer
