@@ -2,9 +2,40 @@
 
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Camera, Scan, MapPin, Crosshair, Loader2, AlertTriangle } from "lucide-react";
+import { Camera, Scan, MapPin, Loader2 } from "lucide-react";
+import { Canvas, useFrame } from "@react-three/fiber";
+import * as THREE from "three";
 import type { Vibe, ScanResult, CameraState } from "@/src/lib/types";
 import type { ThemeColors } from "@/src/theme";
+
+/**
+ * Compute the rendered rect of a video with object-cover inside its container.
+ * Returns {offsetX, offsetY, renderedW, renderedH} in CSS pixels.
+ * Gemini bbox coords (0–1) are relative to the captured frame (= full video res).
+ * We need to map them to the portion of the container that actually shows the video.
+ */
+function getObjectCoverRect(
+  containerW: number,
+  containerH: number,
+  videoW: number,
+  videoH: number
+): { offsetX: number; offsetY: number; renderedW: number; renderedH: number } {
+  const containerAR = containerW / containerH;
+  const videoAR = videoW / videoH;
+  let renderedW: number, renderedH: number;
+  if (videoAR > containerAR) {
+    // Video is wider → height fills, width overflows → crop left/right
+    renderedH = containerH;
+    renderedW = containerH * videoAR;
+  } else {
+    // Video is taller → width fills, height overflows → crop top/bottom
+    renderedW = containerW;
+    renderedH = containerW / videoAR;
+  }
+  const offsetX = (containerW - renderedW) / 2;
+  const offsetY = (containerH - renderedH) / 2;
+  return { offsetX, offsetY, renderedW, renderedH };
+}
 
 interface CameraViewProps {
   vibe: Vibe;
@@ -15,11 +46,55 @@ interface CameraViewProps {
 }
 
 type Phase = "camera" | "scanning" | "discovered" | "no-detection";
+type BoundingBox = { x: number; y: number; width: number; height: number };
+
+function clamp01(v: number): number {
+  return Math.max(0, Math.min(1, v));
+}
+
+function normalizeBox(box: BoundingBox): BoundingBox {
+  const x1 = clamp01(box.x);
+  const y1 = clamp01(box.y);
+  const x2 = clamp01(box.x + box.width);
+  const y2 = clamp01(box.y + box.height);
+  return {
+    x: Math.min(x1, x2),
+    y: Math.min(y1, y2),
+    width: Math.max(0.02, Math.abs(x2 - x1)),
+    height: Math.max(0.02, Math.abs(y2 - y1)),
+  };
+}
+
+function iou(a: BoundingBox, b: BoundingBox): number {
+  const ax2 = a.x + a.width;
+  const ay2 = a.y + a.height;
+  const bx2 = b.x + b.width;
+  const by2 = b.y + b.height;
+  const ix = Math.max(0, Math.min(ax2, bx2) - Math.max(a.x, b.x));
+  const iy = Math.max(0, Math.min(ay2, by2) - Math.max(a.y, b.y));
+  const inter = ix * iy;
+  const union = a.width * a.height + b.width * b.height - inter;
+  if (union <= 0) return 0;
+  return inter / union;
+}
+
+function smoothBox(prev: BoundingBox | null, next: BoundingBox): BoundingBox {
+  if (!prev) return normalizeBox(next);
+  const cleanNext = normalizeBox(next);
+  const overlap = iou(prev, cleanNext);
+  const alpha = overlap > 0.08 ? 0.28 : 1; // hard switch for new target
+  return normalizeBox({
+    x: prev.x + (cleanNext.x - prev.x) * alpha,
+    y: prev.y + (cleanNext.y - prev.y) * alpha,
+    width: prev.width + (cleanNext.width - prev.width) * alpha,
+    height: prev.height + (cleanNext.height - prev.height) * alpha,
+  });
+}
 
 function ArtifactSprite({ vibe, color }: { vibe: Vibe; color: string }) {
   if (vibe === "Cyberpunk") {
     return (
-      <svg viewBox="0 0 200 200" className="w-48 h-48" style={{ filter: `drop-shadow(0 0 20px ${color})` }}>
+      <svg viewBox="0 0 200 200" className="w-full h-full" style={{ filter: `drop-shadow(0 0 20px ${color})` }}>
         <style>{`
           @keyframes hexSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
           @keyframes hexSpinR { from { transform: rotate(360deg); } to { transform: rotate(0deg); } }
@@ -42,7 +117,7 @@ function ArtifactSprite({ vibe, color }: { vibe: Vibe; color: string }) {
 
   if (vibe === "Fantasy") {
     return (
-      <svg viewBox="0 0 200 200" className="w-48 h-48" style={{ filter: `drop-shadow(0 0 25px ${color})` }}>
+      <svg viewBox="0 0 200 200" className="w-full h-full" style={{ filter: `drop-shadow(0 0 25px ${color})` }}>
         <style>{`
           @keyframes runeSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
           @keyframes runeSpinR { from { transform: rotate(360deg); } to { transform: rotate(0deg); } }
@@ -70,7 +145,7 @@ function ArtifactSprite({ vibe, color }: { vibe: Vibe; color: string }) {
 
   if (vibe === "Noir") {
     return (
-      <svg viewBox="0 0 200 200" className="w-48 h-48" style={{ filter: `drop-shadow(0 0 15px ${color})` }}>
+      <svg viewBox="0 0 200 200" className="w-full h-full" style={{ filter: `drop-shadow(0 0 15px ${color})` }}>
         <style>{`
           @keyframes flicker { 0%,19%,21%,23%,25%,54%,56%,100%{opacity:1} 20%,24%,55%{opacity:0.3} }
           @keyframes buzz { 0%,100%{transform:translate(0,0)} 25%{transform:translate(1px,0)} 50%{transform:translate(-1px,1px)} 75%{transform:translate(0,-1px)} }
@@ -87,7 +162,7 @@ function ArtifactSprite({ vibe, color }: { vibe: Vibe; color: string }) {
 
   // Historical - compass
   return (
-    <svg viewBox="0 0 200 200" className="w-48 h-48" style={{ filter: `drop-shadow(0 0 20px ${color})` }}>
+    <svg viewBox="0 0 200 200" className="w-full h-full" style={{ filter: `drop-shadow(0 0 20px ${color})` }}>
       <style>{`
         @keyframes needle { 0%{transform:rotate(0deg)} 10%{transform:rotate(-15deg)} 20%{transform:rotate(10deg)} 30%{transform:rotate(-5deg)} 40%{transform:rotate(3deg)} 50%,100%{transform:rotate(0deg)} }
         @keyframes compSpin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
@@ -110,9 +185,169 @@ function ArtifactSprite({ vibe, color }: { vibe: Vibe; color: string }) {
   );
 }
 
+function RelicMesh({ color, vibe }: { color: string; vibe: Vibe }) {
+  const groupRef = useRef<THREE.Group>(null);
+  const coreRef = useRef<THREE.Mesh>(null);
+  const orbitARef = useRef<THREE.Mesh>(null);
+  const orbitBRef = useRef<THREE.Mesh>(null);
+
+  useFrame((state, delta) => {
+    const t = state.clock.elapsedTime;
+    if (groupRef.current) {
+      if (vibe === "Cyberpunk") {
+        groupRef.current.rotation.y += delta * 1.3;
+        groupRef.current.rotation.x = Math.sin(t * 1.4) * 0.18;
+      } else if (vibe === "Fantasy") {
+        groupRef.current.rotation.y += delta * 0.55;
+        groupRef.current.rotation.z = Math.sin(t * 0.7) * 0.22;
+      } else if (vibe === "Noir") {
+        groupRef.current.rotation.y += delta * 0.35;
+        groupRef.current.rotation.x = Math.sin(t * 2.1) * 0.05;
+      } else {
+        groupRef.current.rotation.y += delta * 0.75;
+        groupRef.current.rotation.x = Math.sin(t * 0.8) * 0.22;
+      }
+    }
+    if (coreRef.current) {
+      coreRef.current.position.y =
+        vibe === "Noir" ? Math.sin(t * 1.1) * 0.03 :
+        vibe === "Fantasy" ? Math.sin(t * 1.4) * 0.12 :
+        Math.sin(t * 1.7) * 0.08;
+    }
+    if (orbitARef.current) {
+      orbitARef.current.rotation.z += delta * (vibe === "Cyberpunk" ? 2.1 : 1.1);
+    }
+    if (orbitBRef.current) {
+      orbitBRef.current.rotation.x -= delta * (vibe === "Fantasy" ? 1.6 : 0.9);
+    }
+  });
+
+  const coreMaterial =
+    vibe === "Cyberpunk"
+      ? { metalness: 0.9, roughness: 0.08, emissiveIntensity: 0.75 }
+      : vibe === "Fantasy"
+        ? { metalness: 0.2, roughness: 0.35, emissiveIntensity: 0.45 }
+        : vibe === "Noir"
+          ? { metalness: 0.15, roughness: 0.85, emissiveIntensity: 0.18 }
+          : { metalness: 0.55, roughness: 0.18, emissiveIntensity: 0.5 };
+
+  return (
+    <group ref={groupRef}>
+      <mesh ref={coreRef}>
+        {vibe === "Cyberpunk" && <octahedronGeometry args={[0.74, 0]} />}
+        {vibe === "Fantasy" && <dodecahedronGeometry args={[0.72, 0]} />}
+        {vibe === "Noir" && <boxGeometry args={[1.0, 1.0, 1.0]} />}
+        {vibe === "Historical" && <icosahedronGeometry args={[0.72, 1]} />}
+        <meshStandardMaterial
+          color={vibe === "Noir" ? "#d6d6d6" : color}
+          emissive={vibe === "Noir" ? "#454545" : color}
+          emissiveIntensity={coreMaterial.emissiveIntensity}
+          metalness={coreMaterial.metalness}
+          roughness={coreMaterial.roughness}
+        />
+      </mesh>
+
+      {vibe !== "Noir" && (
+        <>
+          <mesh ref={orbitARef} rotation={[Math.PI / 2.8, 0, 0]}>
+            <torusGeometry args={[1.12, vibe === "Cyberpunk" ? 0.03 : 0.04, 16, 80]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35} metalness={0.35} roughness={0.25} />
+          </mesh>
+          <mesh ref={orbitBRef} rotation={[0, Math.PI / 2.8, Math.PI / 4]}>
+            <torusGeometry args={[1.35, 0.025, 16, 80]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.28} metalness={0.25} roughness={0.4} />
+          </mesh>
+        </>
+      )}
+
+      {vibe === "Cyberpunk" && (
+        <mesh rotation={[Math.PI / 4, Math.PI / 4, 0]}>
+          <torusKnotGeometry args={[0.5, 0.12, 72, 12]} />
+          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.45} metalness={0.85} roughness={0.12} />
+        </mesh>
+      )}
+
+      {vibe === "Fantasy" && (
+        <>
+          <mesh position={[0, 1.12, 0]}>
+            <coneGeometry args={[0.14, 0.35, 6]} />
+            <meshStandardMaterial color="#fef3c7" emissive="#f59e0b" emissiveIntensity={0.35} metalness={0.15} roughness={0.45} />
+          </mesh>
+          <mesh position={[0, -1.12, 0]} rotation={[Math.PI, 0, 0]}>
+            <coneGeometry args={[0.14, 0.35, 6]} />
+            <meshStandardMaterial color="#fef3c7" emissive="#f59e0b" emissiveIntensity={0.35} metalness={0.15} roughness={0.45} />
+          </mesh>
+        </>
+      )}
+
+      {vibe === "Noir" && (
+        <mesh rotation={[0.2, 0.4, 0]}>
+          <ringGeometry args={[1.0, 1.18, 4]} />
+          <meshStandardMaterial color="#888888" emissive="#111111" emissiveIntensity={0.2} metalness={0.05} roughness={0.9} />
+        </mesh>
+      )}
+
+      {vibe === "Historical" && (
+        <mesh rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[0.95, 0.95, 0.08, 48]} />
+          <meshStandardMaterial color="#caa46a" emissive="#7c5a2f" emissiveIntensity={0.2} metalness={0.3} roughness={0.6} />
+        </mesh>
+      )}
+    </group>
+  );
+}
+
+function ThreeSpriteOverlay({
+  cx,
+  cy,
+  size = 160,
+  color,
+  vibe,
+}: {
+  cx: number;
+  cy: number;
+  size?: number;
+  color: string;
+  vibe: Vibe;
+}) {
+  return (
+    <div
+      className="absolute pointer-events-none"
+      style={{ left: cx, top: cy, width: size, height: size, transform: "translate(-50%, -56%)" }}
+    >
+      <motion.div
+        className="absolute -inset-3 rounded-full blur-2xl"
+        style={{ background: `radial-gradient(circle, ${color}55 0%, ${color}18 45%, transparent 80%)` }}
+        animate={{ scale: [0.88, 1.2, 0.88], opacity: [0.2, 0.58, 0.2] }}
+        transition={{ duration: 2.1, repeat: Infinity }}
+      />
+      <div className="absolute inset-10 opacity-30 mix-blend-screen">
+        <ArtifactSprite vibe={vibe} color={color} />
+      </div>
+      <div className="absolute inset-0">
+        <Canvas
+          dpr={[1, 1.6]}
+          gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
+          camera={{ position: [0, 0, 4.5], fov: 40 }}
+        >
+          <ambientLight intensity={vibe === "Noir" ? 0.3 : 0.55} />
+          <pointLight
+            position={[2, 2, 3]}
+            intensity={vibe === "Cyberpunk" ? 1.8 : vibe === "Noir" ? 0.9 : 1.45}
+            color={vibe === "Historical" ? "#f5d6a1" : color}
+          />
+          <pointLight position={[-2, -1, 2]} intensity={0.7} color="#ffffff" />
+          <RelicMesh color={color} vibe={vibe} />
+        </Canvas>
+      </div>
+    </div>
+  );
+}
+
 export function CameraView({ vibe, theme: t, stopName, onCollect }: CameraViewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -120,11 +355,21 @@ export function CameraView({ vibe, theme: t, stopName, onCollect }: CameraViewPr
   const [phase, setPhase] = useState<Phase>("camera");
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
-  const [debugLog, setDebugLog] = useState<string[]>([]);
+  const [liveMode, setLiveMode] = useState(true);
+  const [liveBox, setLiveBox] = useState<BoundingBox | null>(null);
+  const [liveLabel, setLiveLabel] = useState("");
+  const [lockProgress, setLockProgress] = useState(0);
+  const [frozenFrame, setFrozenFrame] = useState<string | null>(null);
+  const [frozenBox, setFrozenBox] = useState<BoundingBox | null>(null);
+  const liveInFlightRef = useRef(false);
+  const liveBoxRef = useRef<BoundingBox | null>(null);
+  const liveMissesRef = useRef(0);
+  const lockStreakRef = useRef(0);
+  const autoSnapInFlightRef = useRef(false);
+  const lastAutoSnapAtRef = useRef(0);
 
   const log = useCallback((msg: string) => {
     console.log(`[CV] ${msg}`);
-    setDebugLog((prev) => [...prev.slice(-5), msg]);
   }, []);
 
   const startCamera = useCallback(async () => {
@@ -158,32 +403,37 @@ export function CameraView({ vibe, theme: t, stopName, onCollect }: CameraViewPr
     return () => stopCamera();
   }, [startCamera, stopCamera]);
 
-  const captureFrame = useCallback((): string | null => {
+  const captureFrame = useCallback((opts?: { maxWidth?: number; quality?: number }): string | null => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas || video.readyState < 2) { log("Cannot capture"); return null; }
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+    const srcW = video.videoWidth || 640;
+    const srcH = video.videoHeight || 480;
+    const maxWidth = opts?.maxWidth ?? srcW;
+    const scale = Math.min(1, maxWidth / srcW);
+    canvas.width = Math.max(1, Math.round(srcW * scale));
+    canvas.height = Math.max(1, Math.round(srcH * scale));
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
-    ctx.drawImage(video, 0, 0);
-    return canvas.toDataURL("image/jpeg", 0.8);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", opts?.quality ?? 0.8);
   }, [log]);
 
-  const handleScan = useCallback(async () => {
+  const runScanWithFrame = useCallback(async (frame: string, source: "manual" | "auto") => {
     if (phase !== "camera") return;
-    const frame = captureFrame();
-    if (!frame) { log("No frame"); return; }
-
+    autoSnapInFlightRef.current = true;
+    lockStreakRef.current = 0;
+    setLockProgress(0);
+    setFrozenFrame(frame);
+    if (liveBoxRef.current) setFrozenBox(liveBoxRef.current);
     setPhase("scanning");
-    log("Scanning...");
-
+    log(source === "auto" ? "Target locked ✓ Auto-snap..." : "Scanning...");
     try {
       const base64 = frame.split(",")[1];
       const res = await fetch("/api/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: base64, vibe, expectedLocation: stopName }),
+        body: JSON.stringify({ image: base64, vibe, expectedLocation: stopName, mode: "scan" }),
       });
       if (!res.ok) { log(`API ${res.status}`); setPhase("camera"); return; }
 
@@ -192,19 +442,129 @@ export function CameraView({ vibe, theme: t, stopName, onCollect }: CameraViewPr
       setCapturedImage(frame);
 
       if (!data.landmarkDetected) {
+        if (source === "auto") {
+          setFrozenFrame(null);
+          setFrozenBox(null);
+          setPhase("camera");
+          return;
+        }
         setScanResult(data);
         setPhase("no-detection");
         return;
       }
 
       setScanResult(data);
+      if (data.boundingBox) setFrozenBox(data.boundingBox as BoundingBox);
       setPhase("discovered");
       log("DISCOVERED ✓");
     } catch (e) {
       log(`Error: ${e}`);
+      setFrozenFrame(null);
+      setFrozenBox(null);
       setPhase("camera");
+    } finally {
+      autoSnapInFlightRef.current = false;
     }
-  }, [phase, captureFrame, vibe, stopName, log]);
+  }, [phase, vibe, stopName, log]);
+
+  const detectLive = useCallback(async () => {
+    if (liveInFlightRef.current || autoSnapInFlightRef.current || phase !== "camera" || cameraState !== "active") return;
+    const frame = captureFrame({ maxWidth: 640, quality: 0.6 });
+    if (!frame) return;
+    liveInFlightRef.current = true;
+    try {
+      const base64 = frame.split(",")[1];
+      const res = await fetch("/api/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: base64, vibe, expectedLocation: stopName, mode: "detect" }),
+      });
+      if (!res.ok) return;
+      const data: ScanResult = await res.json();
+      if (!data.landmarkDetected || !data.boundingBox) {
+        liveMissesRef.current += 1;
+        setLockProgress(0);
+        lockStreakRef.current = 0;
+        if (liveMissesRef.current >= 3) {
+          setLiveBox(null);
+          liveBoxRef.current = null;
+          setLiveLabel("");
+        }
+        return;
+      }
+      liveMissesRef.current = 0;
+      setLiveLabel(data.landmarkName || "Detected");
+
+      const prevBox = liveBoxRef.current;
+      const smoothed = smoothBox(prevBox, data.boundingBox as BoundingBox);
+      liveBoxRef.current = smoothed;
+      setLiveBox(smoothed);
+
+      const overlap = prevBox ? iou(prevBox, smoothed) : 0;
+      lockStreakRef.current = overlap > 0.55 ? lockStreakRef.current + 1 : 1;
+      const lockSteps = Math.min(lockStreakRef.current, 3);
+      setLockProgress(lockSteps / 3);
+
+      const lockReady = lockSteps >= 3 && liveMode;
+      const offCooldown = Date.now() - lastAutoSnapAtRef.current > 5000;
+      if (lockReady && offCooldown && !autoSnapInFlightRef.current) {
+        lastAutoSnapAtRef.current = Date.now();
+        const full = captureFrame({ maxWidth: 1280, quality: 0.82 }) || captureFrame();
+        if (full) {
+          setFrozenFrame(full);
+          setFrozenBox(smoothed);
+          void runScanWithFrame(full, "auto");
+        }
+      }
+    } catch {
+      // Silent fail; live loop should keep running.
+    } finally {
+      liveInFlightRef.current = false;
+    }
+  }, [phase, cameraState, captureFrame, vibe, stopName, liveMode, runScanWithFrame]);
+
+  useEffect(() => {
+    if (!liveMode || phase !== "camera" || cameraState !== "active") return;
+    detectLive();
+    const id = window.setInterval(detectLive, 2400);
+    return () => window.clearInterval(id);
+  }, [liveMode, phase, cameraState, detectLive]);
+
+  const getScreenBox = useCallback((bb: BoundingBox) => {
+    const video = videoRef.current;
+    const container = containerRef.current;
+    if (!video || !container) return null;
+    const { offsetX, offsetY, renderedW, renderedH } = getObjectCoverRect(
+      container.offsetWidth,
+      container.offsetHeight,
+      video.videoWidth || 1280,
+      video.videoHeight || 720
+    );
+    const safe = normalizeBox(bb);
+    return {
+      left: offsetX + safe.x * renderedW,
+      top: offsetY + safe.y * renderedH,
+      width: safe.width * renderedW,
+      height: safe.height * renderedH,
+    };
+  }, []);
+
+  const getSpriteAnchor = useCallback((bb: BoundingBox) => {
+    const box = getScreenBox(bb);
+    if (!box) return null;
+    return {
+      cx: box.left + box.width / 2,
+      cy: box.top + box.height / 2,
+      size: Math.max(92, Math.min(240, Math.max(box.width, box.height) * 1.08)),
+    };
+  }, [getScreenBox]);
+
+  const handleScan = useCallback(async () => {
+    if (phase !== "camera") return;
+    const frame = captureFrame();
+    if (!frame) { log("No frame"); return; }
+    await runScanWithFrame(frame, "manual");
+  }, [phase, captureFrame, log, runScanWithFrame]);
 
   const handleCollect = useCallback(() => {
     if (capturedImage && scanResult) {
@@ -219,6 +579,14 @@ export function CameraView({ vibe, theme: t, stopName, onCollect }: CameraViewPr
     setPhase("camera");
     setScanResult(null);
     setCapturedImage(null);
+    setLiveBox(null);
+    setLiveLabel("");
+    setLockProgress(0);
+    setFrozenFrame(null);
+    setFrozenBox(null);
+    lockStreakRef.current = 0;
+    liveBoxRef.current = null;
+    liveMissesRef.current = 0;
   }, [log]);
 
   const handleFileCapture = useCallback(
@@ -234,11 +602,13 @@ export function CameraView({ vibe, theme: t, stopName, onCollect }: CameraViewPr
           const res = await fetch("/api/scan", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ image: base64, vibe, expectedLocation: stopName }),
+            body: JSON.stringify({ image: base64, vibe, expectedLocation: stopName, mode: "scan" }),
           });
           if (!res.ok) throw new Error();
           const data: ScanResult = await res.json();
           setCapturedImage(b64Full);
+          setFrozenFrame(b64Full);
+          if (data.boundingBox) setFrozenBox(data.boundingBox as BoundingBox);
           if (!data.landmarkDetected) { setScanResult(data); setPhase("no-detection"); return; }
           setScanResult(data);
           setPhase("discovered");
@@ -249,15 +619,27 @@ export function CameraView({ vibe, theme: t, stopName, onCollect }: CameraViewPr
     [vibe, stopName, log]
   );
 
+  const showFrozenFrame = Boolean(frozenFrame) && phase !== "camera";
+  const activeOverlayBox = (phase === "discovered" && scanResult?.boundingBox)
+    ? (scanResult.boundingBox as BoundingBox)
+    : frozenBox;
+
   return (
-    <div className="flex-1 flex flex-col relative overflow-hidden rounded-3xl" style={{ minHeight: "70vh" }}>
+    <div ref={containerRef} className="flex-1 flex flex-col relative overflow-hidden rounded-3xl" style={{ minHeight: "70vh" }}>
       <canvas ref={canvasRef} className="hidden" />
 
-      {/* Camera Feed - ALWAYS visible */}
-      <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-cover" style={{ backgroundColor: "#000" }} />
-
-      {/* Scan lines */}
-      <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 5, background: `repeating-linear-gradient(0deg, transparent 0px, transparent 3px, ${t.accent}05 3px, ${t.accent}05 4px)` }} />
+      {/* Camera feed + frozen frame */}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        className="absolute inset-0 w-full h-full object-cover"
+        style={{ backgroundColor: "#000", opacity: showFrozenFrame ? 0 : 1 }}
+      />
+      {showFrozenFrame && frozenFrame && (
+        <img src={frozenFrame} alt="Frozen scan frame" className="absolute inset-0 w-full h-full object-cover" />
+      )}
 
       {/* Top HUD */}
       <div className="relative flex items-center justify-between p-4" style={{ zIndex: 15 }}>
@@ -273,19 +655,89 @@ export function CameraView({ vibe, theme: t, stopName, onCollect }: CameraViewPr
         )}
       </div>
 
-      {/* Camera phase: crosshair */}
+      {/* Camera phase: lock target */}
       {phase === "camera" && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none" style={{ zIndex: 10 }}>
-          <motion.div animate={{ scale: [1, 1.08, 1], opacity: [0.4, 0.8, 0.4] }} transition={{ duration: 2.5, repeat: Infinity }}>
-            <Crosshair size={100} strokeWidth={0.8} style={{ color: t.accent }} />
-          </motion.div>
-          <p className="mt-3 text-xs font-mono" style={{ color: `${t.accent}88` }}>POINT AT A CAN & SCAN</p>
+        <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 10 }}>
+          {liveBox && (() => {
+            const box = getScreenBox(liveBox);
+            if (!box) return null;
+            const anchor = getSpriteAnchor(liveBox);
+            if (!anchor) return null;
+            const cx = anchor.cx;
+            const cy = anchor.cy;
+            const lockPercent = Math.round(lockProgress * 100);
+            return (
+              <>
+                <motion.div
+                  className="absolute rounded-md border"
+                  style={{
+                    left: box.left,
+                    top: box.top,
+                    width: box.width,
+                    height: box.height,
+                    borderColor: `${t.accent}88`,
+                    boxShadow: `0 0 8px ${t.accent}33`,
+                  }}
+                  animate={{ opacity: [0.35, 0.65, 0.35] }}
+                  transition={{ duration: 1.6, repeat: Infinity }}
+                />
+                <div className="absolute px-2 py-1 rounded-md text-[10px] font-mono uppercase tracking-wide" style={{ left: box.left, top: box.top - 24, color: t.foreground, backgroundColor: `${t.background}cc`, border: `1px solid ${t.accent}66` }}>
+                  {lockPercent >= 100 ? "LOCKED" : `LOCK ${lockPercent}%`}: {liveLabel || "Target"}
+                </div>
+                <motion.div
+                  className="absolute inset-0"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: lockProgress > 0.4 ? 1 : 0.55 }}
+                >
+                  <ThreeSpriteOverlay cx={cx} cy={cy} size={anchor.size} color={t.accent} vibe={vibe} />
+                </motion.div>
+              </>
+            );
+          })()}
         </div>
       )}
+
+      {phase === "scanning" && activeOverlayBox && (() => {
+        const anchor = getSpriteAnchor(activeOverlayBox);
+        if (!anchor) return null;
+        return (
+          <motion.div className="absolute inset-0 pointer-events-none" style={{ zIndex: 55 }} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+            <ThreeSpriteOverlay cx={anchor.cx} cy={anchor.cy} size={Math.max(anchor.size, 170)} color={t.accent} vibe={vibe} />
+          </motion.div>
+        );
+      })()}
 
       {/* Camera phase: bottom button */}
       {phase === "camera" && (
         <div className="relative mt-auto flex flex-col items-center gap-3 p-6" style={{ zIndex: 15 }}>
+          <div className="flex items-center gap-2 px-2 py-1 rounded-full" style={{ backgroundColor: `${t.background}aa` }}>
+            <button
+              type="button"
+              onClick={() => {
+                setLiveMode((v) => {
+                  const next = !v;
+                  if (!next) {
+                    setLockProgress(0);
+                    lockStreakRef.current = 0;
+                  }
+                  return next;
+                });
+              }}
+              className="text-[10px] font-mono uppercase tracking-wide px-2.5 py-1 rounded-full border cursor-pointer"
+              style={{ color: liveMode ? t.accent : t.muted, borderColor: liveMode ? `${t.accent}88` : `${t.muted}66`, backgroundColor: `${t.background}99` }}
+            >
+              Live lock {liveMode ? "on" : "off"}
+            </button>
+          </div>
+          {liveMode && (
+            <div className="w-44 h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: `${t.background}bb`, border: `1px solid ${t.accent}33` }}>
+              <motion.div
+                className="h-full"
+                style={{ backgroundColor: t.accent, boxShadow: `0 0 12px ${t.accentGlow}` }}
+                animate={{ width: `${Math.round(lockProgress * 100)}%` }}
+              />
+            </div>
+          )}
           {cameraState === "active" ? (
             <>
               <button onClick={handleScan} className="w-20 h-20 rounded-full flex items-center justify-center border-4 active:scale-90 transition-transform cursor-pointer" style={{ backgroundColor: t.foreground, borderColor: `${t.accent}40`, boxShadow: `0 0 30px ${t.accentGlow}` }}>
@@ -301,11 +753,6 @@ export function CameraView({ vibe, theme: t, stopName, onCollect }: CameraViewPr
               <span className="text-xs font-mono" style={{ color: `${t.muted}88` }}>CAMERA BLOCKED — TAP TO UPLOAD</span>
             </>
           )}
-          {debugLog.length > 0 && (
-            <div className="w-full max-h-16 overflow-y-auto rounded p-1.5 mt-1" style={{ backgroundColor: `${t.background}88` }}>
-              {debugLog.map((l, i) => <p key={i} className="text-[10px] font-mono opacity-40">{l}</p>)}
-            </div>
-          )}
         </div>
       )}
 
@@ -314,12 +761,8 @@ export function CameraView({ vibe, theme: t, stopName, onCollect }: CameraViewPr
         {phase === "scanning" && (
           <motion.div key="scanning" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 flex items-center justify-center" style={{ zIndex: 50, backgroundColor: `${t.background}88` }}>
             <div className="flex flex-col items-center gap-4">
-              <div className="relative w-32 h-32">
-                <motion.div className="absolute inset-0 rounded-full border-2" style={{ borderColor: t.accent }} animate={{ scale: [1, 1.6, 1], opacity: [0.8, 0, 0.8] }} transition={{ duration: 1.8, repeat: Infinity }} />
-                <motion.div className="absolute inset-4 rounded-full border" style={{ borderColor: `${t.accent}80` }} animate={{ scale: [1, 1.4, 1], opacity: [0.6, 0, 0.6] }} transition={{ duration: 1.8, repeat: Infinity, delay: 0.4 }} />
-                <div className="absolute inset-0 flex items-center justify-center"><Loader2 size={28} className="animate-spin" style={{ color: t.accent }} /></div>
-              </div>
-              <p className="text-sm font-mono" style={{ color: t.foreground }}>Scanning...</p>
+              <Loader2 size={32} className="animate-spin" style={{ color: t.accent }} />
+              <p className="text-sm font-medium" style={{ color: t.foreground }}>Scanning target...</p>
             </div>
           </motion.div>
         )}
@@ -329,11 +772,8 @@ export function CameraView({ vibe, theme: t, stopName, onCollect }: CameraViewPr
       <AnimatePresence>
         {phase === "no-detection" && (
           <motion.div key="no-detect" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 flex flex-col items-center justify-center p-6" style={{ zIndex: 50, backgroundColor: `${t.background}dd` }}>
-            <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: "spring" }} className="w-20 h-20 rounded-full flex items-center justify-center mb-4" style={{ backgroundColor: `${t.accent}15`, border: `2px solid ${t.accent}40` }}>
-              <AlertTriangle size={32} style={{ color: t.accent }} />
-            </motion.div>
-            <p className="text-lg font-semibold mb-2" style={{ color: t.foreground }}>No Can Detected</p>
-            <p className="text-sm text-center mb-6 max-w-xs" style={{ color: t.muted }}>Point your camera at a <strong style={{ color: t.accent }}>soda can, La Croix, Coke</strong>, or any beverage can and try again.</p>
+            <p className="text-lg font-semibold mb-2" style={{ color: t.foreground }}>Nothing Detected</p>
+            <p className="text-sm text-center mb-6 max-w-xs" style={{ color: t.muted }}>Try framing the landmark or a red parking sign in better light, then scan again.</p>
             <button onClick={handleRescan} className="px-8 py-3 rounded-full text-sm font-bold active:scale-95 transition-transform cursor-pointer" style={{ backgroundColor: t.accent, color: t.background, boxShadow: `0 0 20px ${t.accentGlow}` }}>Try Again</button>
           </motion.div>
         )}
@@ -350,87 +790,44 @@ export function CameraView({ vibe, theme: t, stopName, onCollect }: CameraViewPr
             {/* Flash */}
             <motion.div className="absolute inset-0" style={{ backgroundColor: t.accent }} initial={{ opacity: 0.9 }} animate={{ opacity: 0 }} transition={{ duration: 0.3 }} />
 
-            {/* Bounding box highlight - shows where the object was detected */}
-            {scanResult.boundingBox && (
-              <motion.div
-                className="absolute border-2 rounded-lg"
-                style={{
-                  borderColor: t.accent,
-                  boxShadow: `0 0 20px ${t.accentGlow}, inset 0 0 20px ${t.accent}15`,
-                  left: `${scanResult.boundingBox.x * 100}%`,
-                  top: `${scanResult.boundingBox.y * 100}%`,
-                  width: `${scanResult.boundingBox.width * 100}%`,
-                  height: `${scanResult.boundingBox.height * 100}%`,
-                }}
-                initial={{ opacity: 0, scale: 1.3 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ duration: 0.5, delay: 0.2 }}
-              >
-                {/* Corner markers */}
-                <div className="absolute -top-1 -left-1 w-4 h-4 border-t-2 border-l-2 rounded-tl" style={{ borderColor: t.accent }} />
-                <div className="absolute -top-1 -right-1 w-4 h-4 border-t-2 border-r-2 rounded-tr" style={{ borderColor: t.accent }} />
-                <div className="absolute -bottom-1 -left-1 w-4 h-4 border-b-2 border-l-2 rounded-bl" style={{ borderColor: t.accent }} />
-                <div className="absolute -bottom-1 -right-1 w-4 h-4 border-b-2 border-r-2 rounded-br" style={{ borderColor: t.accent }} />
-              </motion.div>
-            )}
+            {/* Bounding box highlight — pixel-accurate via object-cover mapping */}
+            {scanResult.boundingBox && (() => {
+              const box = getScreenBox(scanResult.boundingBox as BoundingBox);
+              if (!box) return null;
+              const left = box.left;
+              const top = box.top;
+              const width = box.width;
+              const height = box.height;
+              return (
+                <>
+                  {/* The bounding box */}
+                  <motion.div
+                    className="absolute rounded-md border"
+                    style={{
+                      borderColor: `${t.accent}88`,
+                      boxShadow: `0 0 10px ${t.accent}30`,
+                      left, top, width, height,
+                    }}
+                  />
+                </>
+              );
+            })()}
 
-            {/* Expanding rings from detected object center */}
-            {scanResult.boundingBox && (
-              <>
+            {/* 3D sprite over frozen bbox center */}
+            {activeOverlayBox && (() => {
+              const anchor = getSpriteAnchor(activeOverlayBox);
+              if (!anchor) return null;
+              return (
                 <motion.div
-                  className="absolute rounded-full border-2"
-                  style={{
-                    borderColor: `${t.accent}60`,
-                    left: `${(scanResult.boundingBox.x + scanResult.boundingBox.width / 2) * 100}%`,
-                    top: `${(scanResult.boundingBox.y + scanResult.boundingBox.height / 2) * 100}%`,
-                    width: 40, height: 40, marginLeft: -20, marginTop: -20,
-                  }}
-                  initial={{ scale: 0.5, opacity: 1 }}
-                  animate={{ scale: 5, opacity: 0 }}
-                  transition={{ duration: 1.5, ease: "easeOut" }}
-                />
-                <motion.div
-                  className="absolute rounded-full border-2"
-                  style={{
-                    borderColor: `${t.accent}80`,
-                    left: `${(scanResult.boundingBox.x + scanResult.boundingBox.width / 2) * 100}%`,
-                    top: `${(scanResult.boundingBox.y + scanResult.boundingBox.height / 2) * 100}%`,
-                    width: 30, height: 30, marginLeft: -15, marginTop: -15,
-                  }}
-                  initial={{ scale: 0.5, opacity: 1 }}
-                  animate={{ scale: 4, opacity: 0 }}
-                  transition={{ duration: 1.2, ease: "easeOut", delay: 0.15 }}
-                />
-              </>
-            )}
-
-            {/* ===== SVG ARTIFACT SPRITE — overlaid at bounding box center ===== */}
-            <motion.div
-              className="absolute"
-              initial={{ scale: 0, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ type: "spring", stiffness: 160, damping: 12, delay: 0.25 }}
-              style={
-                scanResult.boundingBox
-                  ? {
-                      left: `${(scanResult.boundingBox.x + scanResult.boundingBox.width / 2) * 100}%`,
-                      top: `${(scanResult.boundingBox.y + scanResult.boundingBox.height / 2) * 100}%`,
-                      transform: "translate(-50%, -50%)",
-                    }
-                  : { left: "50%", top: "40%", transform: "translate(-50%, -50%)" }
-              }
-            >
-              {/* Glow behind sprite */}
-              <motion.div
-                className="absolute -inset-12 rounded-full blur-2xl"
-                style={{ backgroundColor: `${t.accent}20` }}
-                animate={{ scale: [1, 1.3, 1], opacity: [0.2, 0.4, 0.2] }}
-                transition={{ duration: 3, repeat: Infinity }}
-              />
-              <div className="relative">
-                <ArtifactSprite vibe={vibe} color={t.accent} />
-              </div>
-            </motion.div>
+                  className="absolute inset-0"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 0.25 }}
+                >
+                  <ThreeSpriteOverlay cx={anchor.cx} cy={anchor.cy} size={Math.max(anchor.size, 180)} color={t.accent} vibe={vibe} />
+                </motion.div>
+              );
+            })()}
 
             {/* Info panel at bottom */}
             <motion.div
