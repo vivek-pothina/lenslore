@@ -44,6 +44,12 @@ export interface Itinerary {
   title: string;
   summary: string;
   stops: ItineraryStop[];
+  routeSecrets?: {
+    name: string;
+    coordinates: string;
+    lookDirection: string;
+    loreSnippet: string;
+  }[];
 }
 
 export interface StopProgress {
