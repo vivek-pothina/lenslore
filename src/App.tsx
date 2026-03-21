@@ -94,6 +94,7 @@ export default function App() {
   const [copied, setCopied] = useState(false);
   const [expandedSpot, setExpandedSpot] = useState<string | null>(null);
   const [spotLoreCache, setSpotLoreCache] = useState<Record<string, string>>({});
+  const [isPlaying, setIsPlaying] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -414,6 +415,7 @@ export default function App() {
   const nextStop = useCallback(() => {
     if (!itinerary) return;
     if (audioRef.current) audioRef.current.pause();
+    setIsPlaying(false);
     if (progress.currentStopIndex < itinerary.stops.length - 1) {
       setProgress((prev) => {
         const u = { ...prev, currentStopIndex: prev.currentStopIndex + 1 };
@@ -432,6 +434,7 @@ export default function App() {
 
   const endJourney = useCallback(() => {
     if (audioRef.current) audioRef.current.pause();
+    setIsPlaying(false);
     finalLoreMutation.mutate();
     setStep("log");
     saveToSession("step", "log");
@@ -440,6 +443,7 @@ export default function App() {
 
   const goBack = useCallback(() => {
     if (audioRef.current) audioRef.current.pause();
+    setIsPlaying(false);
     const map: Record<AppStep, AppStep> = {
       planning: "welcome",
       preview: "welcome",
@@ -1109,18 +1113,21 @@ export default function App() {
                 className="w-10 h-10 rounded-full flex items-center justify-center text-white shrink-0"
                 style={{ backgroundColor: t.accent }}
               >
-                <audio ref={audioRef} src={sp.audioUrl} className="hidden" />
-                {audioRef.current && !audioRef.current.paused ? (
-                  <Pause size={20} />
-                ) : (
-                  <Play size={20} />
-                )}
+                <audio 
+                  ref={audioRef} 
+                  src={sp.audioUrl} 
+                  className="hidden" 
+                  onPlay={() => setIsPlaying(true)}
+                  onPause={() => setIsPlaying(false)}
+                  onEnded={() => setIsPlaying(false)}
+                />
+                {isPlaying ? <Pause size={20} /> : <Play size={20} />}
               </button>
               <div className="flex-1 flex items-center gap-1 h-6">
                 {[...Array(24)].map((_, i) => (
                   <motion.div
                     key={i}
-                    animate={{ height: [4, Math.random() * 20 + 4, 4] }}
+                    animate={isPlaying ? { height: [4, Math.random() * 20 + 4, 4] } : { height: 4 }}
                     transition={{
                       duration: 0.5,
                       repeat: Infinity,
