@@ -39,25 +39,28 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    if (!image || !vibe || !location) {
+    if (!vibe || !location) {
       return NextResponse.json(
-        { error: "Missing required fields: image, vibe, location" },
+        { error: "Missing required fields: vibe, location" },
         { status: 400 }
       );
     }
 
-    const prompt = `You are a theatrical narrator for an immersive scavenger hunt called "The Urban Alchemist". Vibe: "${vibe}". Location: "${location}". Group: ${groupSize} explorer${groupSize > 1 ? "s" : ""}. Analyze this photo. Generate 3 sentences of immersive lore in the ${vibe} style. Mysterious and atmospheric. No markdown, plain text.`;
+    const prompt = `You are a theatrical narrator for an immersive scavenger hunt called "The Urban Alchemist". Vibe: "${vibe}". Location: "${location}". Group: ${groupSize} explorer${groupSize > 1 ? "s" : ""}. 
+First, verify objectively if the visual evidence reasonably matches ${location}.
+If it is clearly a photo of random garbage, an indoor bedroom, or a drastically incorrect famous landmark, abort the narration and reply EXACTLY AND ONLY with: "INVALID_LOCATION".
+If the location is plausible, analyze the photo(s) and generate 3 sentences of immersive lore in the ${vibe} style. Mysterious and atmospheric. No markdown, plain text.`;
+
+    const parts: any[] = [{ text: prompt }];
+    if (images && images.length > 0) {
+      for (const img of images) {
+        parts.push({ inlineData: { mimeType: "image/jpeg", data: img } });
+      }
+    }
 
     const result = await ai.models.generateContent({
       model,
-      contents: [
-        {
-          parts: [
-            { text: prompt },
-            { inlineData: { mimeType: "image/jpeg", data: image } },
-          ],
-        },
-      ],
+      contents: [{ parts }],
     });
 
     return NextResponse.json({

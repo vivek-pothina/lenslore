@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
   try {
-    const { text, voiceId = "21m00Tcm4lfs74WwtG2i" } = await request.json();
+    const { text, voiceId = "pNInz6obpgDQGcFmaJgB" } = await request.json();
     const apiKey = process.env.ELEVENLABS_API_KEY;
 
     if (!apiKey) {

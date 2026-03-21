@@ -1,5 +1,5 @@
 import { streamText } from 'ai';
-import { google } from '@ai-sdk/google';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
 
 export async function POST(req: Request) {
   console.log('[itinerary] POST hit');
@@ -53,6 +53,7 @@ IMPORTANT: Each stop MUST have 2-3 nearbySpots — real places within walking di
 
   try {
     console.log('[itinerary] calling streamText with gemini-3-flash-preview');
+    const google = createGoogleGenerativeAI({ apiKey });
     const result = streamText({
       model: google('gemini-3-flash-preview'),
       system: systemPrompt,
