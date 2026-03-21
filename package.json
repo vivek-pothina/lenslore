@@ -19,6 +19,7 @@
     "ai": "^6.0.134",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "lottie-react": "^2.4.1",
     "lucide-react": "^0.577.0",
     "motion": "^12.23.24",
     "next": "^16.2.1",

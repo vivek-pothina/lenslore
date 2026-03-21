@@ -3,7 +3,7 @@ import { GoogleGenAI } from "@google/genai";
 
 export async function POST(request: NextRequest) {
   try {
-    const { image, images, vibe, location, groupSize = 1, adventureLog } =
+    const { image, images, vibe, location, groupSize = 1, adventureLog, transitMode } =
       await request.json();
     const apiKey = process.env.GEMINI_API_KEY;
 
@@ -18,7 +18,7 @@ export async function POST(request: NextRequest) {
     const model = "gemini-3-flash-preview";
 
     if (adventureLog && images?.length) {
-      const systemPrompt = `You are "The Urban Alchemist", a D&D dungeon master narrating the conclusion of an urban adventure. Vibe: "${vibe}". Write a cohesive 4-paragraph adventure log in ${vibe} style. Reference each location from the photos. Make it feel like a legendary campaign recap. No markdown, plain text with paragraph breaks.`;
+      const systemPrompt = `You are "The Urban Alchemist", a D&D dungeon master narrating the conclusion of an urban adventure. Vibe: "${vibe}". Write a cohesive 4-paragraph adventure log in the ${vibe} style. Reference each real-world location from the photos and acknowledge their physical journey through the city via ${transitMode || "foot"}. Blend actual city geography with the ${vibe} campaign recap to make it feel like a legendary achievement. No markdown, plain text with paragraph breaks.`;
 
       const parts: any[] = [{ text: systemPrompt }];
       for (const img of images) {

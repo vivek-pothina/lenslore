@@ -40,6 +40,7 @@ import {
 } from "@/components/ui/collapsible";
 import { Progress } from "@/components/ui/progress";
 import { AudioPlayer } from "@/components/audio-player";
+import { CameraView } from "@/components/camera-view";
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -101,6 +102,7 @@ export default function App() {
   const [copied, setCopied] = useState(false);
   const [explorationSpot, setExplorationSpot] = useState<NearbySpot | null>(null);
   const [explorationLore, setExplorationLore] = useState("");
+  const [explorationAudioUrl, setExplorationAudioUrl] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -299,6 +301,7 @@ export default function App() {
           images,
           vibe: config.vibe,
           adventureLog: true,
+          transitMode: config.transitMode,
           stops: itinerary?.stops.map((s) => ({
             name: s.name,
             description: s.description,
@@ -354,6 +357,29 @@ export default function App() {
     [stop]
   );
 
+  const handleCameraCollect = useCallback(
+    (image: string, lore: string) => {
+      if (!stop) return;
+      setProgress((prev) => {
+        const next = [...prev.stopProgress];
+        next[prev.currentStopIndex] = {
+          ...next[prev.currentStopIndex],
+          capturedImage: image,
+          arrived: true,
+          lore,
+        };
+        const u = { ...prev, stopProgress: next };
+        saveToSession("progress", u);
+        return u;
+      });
+      ttsMutation.mutate(lore);
+      setStep("lore");
+      saveToSession("step", "lore");
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stop]
+  );
+
   const exploreLoreMutation = useMutation({
     mutationFn: async (spot: NearbySpot) => {
       const r = await fetch("/api/gemini", {
@@ -370,6 +396,22 @@ export default function App() {
     },
     onSuccess: (data) => {
       setExplorationLore(data.lore);
+      explorationTtsMutation.mutate(data.lore);
+    },
+  });
+
+  const explorationTtsMutation = useMutation({
+    mutationFn: async (text: string) => {
+      const r = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!r.ok) throw new Error();
+      return r.blob();
+    },
+    onSuccess: (blob) => {
+      setExplorationAudioUrl(URL.createObjectURL(blob));
     },
   });
 
@@ -377,6 +419,7 @@ export default function App() {
     (spot: NearbySpot) => {
       setExplorationSpot(spot);
       setExplorationLore("");
+      setExplorationAudioUrl(null);
       setStep("exploration");
       saveToSession("step", "exploration");
       exploreLoreMutation.mutate(spot);
@@ -1354,69 +1397,13 @@ export default function App() {
           </a>
         </div>
 
-        <div className="flex-1 flex flex-col items-center justify-center gap-6">
-          <div
-            className="w-full aspect-[3/4] rounded-3xl relative overflow-hidden flex flex-col items-center justify-center border"
-            style={{ backgroundColor: t.surface, borderColor: t.border }}
-          >
-            <div
-              className="absolute inset-8 border rounded-lg pointer-events-none"
-              style={{ borderColor: `${t.muted}20` }}
-            >
-              {["tl", "tr", "bl", "br"].map((c) => (
-                <div
-                  key={c}
-                  className={`absolute w-8 h-8 ${
-                    c === "tl"
-                      ? "top-0 left-0 rounded-tl-lg border-t-2 border-l-2"
-                      : c === "tr"
-                        ? "top-0 right-0 rounded-tr-lg border-t-2 border-r-2"
-                        : c === "bl"
-                          ? "bottom-0 left-0 rounded-bl-lg border-b-2 border-l-2"
-                          : "bottom-0 right-0 rounded-br-lg border-b-2 border-r-2"
-                  }`}
-                  style={{ borderColor: `${t.muted}30` }}
-                />
-              ))}
-            </div>
-            <Camera
-              size={48}
-              style={{ color: t.muted, opacity: 0.3 }}
-            />
-            <p
-              className="text-xs font-mono uppercase tracking-widest mt-3"
-              style={{ color: t.muted, opacity: 0.5 }}
-            >
-              Capture Artifact
-            </p>
-          </div>
-
-          <input
-            type="file"
-            accept="image/*"
-            capture="environment"
-            className="hidden"
-            onChange={handleCapture}
-            ref={fileInputRef}
-          />
-
-          <div className="flex items-center justify-center">
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="w-20 h-20 rounded-full flex items-center justify-center border-4 active:scale-90 transition-transform"
-              style={{
-                backgroundColor: t.foreground,
-                borderColor: t.background,
-                boxShadow: `0 0 20px ${t.accentGlow}`,
-              }}
-            >
-              <div
-                className="w-14 h-14 rounded-full border-2"
-                style={{ borderColor: `${t.background}30` }}
-              />
-            </button>
-          </div>
-        </div>
+        <CameraView
+          vibe={config.vibe}
+          theme={t}
+          stopName={stop.name}
+          stopAddress={stop.address}
+          onCollect={handleCameraCollect}
+        />
       </motion.div>
     );
   };
@@ -1610,7 +1597,7 @@ export default function App() {
             style={{
               backgroundColor: t.accent,
               color: "#fff",
-              boxShadow: `0 0 15px ${t.accentGlow}`,
+              boxShadow: `0 0 20px ${t.accentGlow}`,
             }}
           >
             {isLast ? (
@@ -1640,64 +1627,78 @@ export default function App() {
     return (
       <motion.div
         key="exploration"
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: -20 }}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
         className="flex flex-col h-full"
       >
         <div className="flex gap-4 mb-6">
           <div
-            className="w-16 h-16 shrink-0 rounded-xl flex items-center justify-center text-2xl border"
-            style={{
-              backgroundColor: t.accentLight,
-              borderColor: t.accent,
-            }}
+            className="w-24 h-24 shrink-0 rounded overflow-hidden border flex items-center justify-center text-3xl"
+            style={{ backgroundColor: t.surface, borderColor: t.border }}
           >
             {stopIcon(explorationSpot.type)}
           </div>
           <div className="flex flex-col justify-center">
             <h2 className="text-xl font-semibold">{explorationSpot.name}</h2>
-            <span
-              className="text-[10px] font-mono uppercase px-2 py-0.5 rounded w-fit mt-1"
-              style={{
-                backgroundColor: t.accentLight,
-                color: t.accent,
-              }}
-            >
-              {explorationSpot.type}
-            </span>
+            <p className="text-xs font-mono uppercase" style={{ color: t.accent }}>
+              {stopIcon(explorationSpot.type)} {explorationSpot.type}
+            </p>
           </div>
         </div>
 
-        <div
-          className="rounded-xl border p-5 mb-6"
-          style={{ backgroundColor: t.surface, borderColor: t.border }}
-        >
-          <p
-            className="text-sm italic leading-relaxed"
-            style={{ color: t.muted }}
-          >
-            &ldquo;{explorationSpot.shortDescription}&rdquo;
-          </p>
-        </div>
-
-        <div className="flex-1">
-          {exploreLoreMutation.isPending && !explorationLore && (
+        <div className="flex-1 space-y-6">
+          {!explorationLore && exploreLoreMutation.isPending && (
             <div className="py-4">
               {renderVibeLoading("Unearthing secrets...")}
             </div>
           )}
 
           {explorationLore && (
-            <div className="space-y-4">
-              <p className="text-base font-serif leading-relaxed italic">
-                &ldquo;{explorationLore}&rdquo;
-              </p>
+            <p className="text-lg font-serif leading-relaxed italic">
+              &ldquo;{explorationLore}&rdquo;
+            </p>
+          )}
+
+          {explorationTtsMutation.isPending && !explorationAudioUrl && explorationLore && (
+            <div
+              className="rounded-xl border p-4 flex items-center gap-4"
+              style={{ backgroundColor: "rgba(9,9,11,0.6)", borderColor: t.border }}
+            >
+              <div
+                className="size-10 rounded-full flex items-center justify-center shrink-0"
+                style={{ backgroundColor: t.accentLight }}
+              >
+                <Loader2 size={16} className="animate-spin" style={{ color: t.accent }} />
+              </div>
+              <div className="flex-1 space-y-2">
+                <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: t.border }}>
+                  <motion.div
+                    className="h-full rounded-full"
+                    style={{
+                      background: `linear-gradient(90deg, transparent, ${t.accent}40, transparent)`,
+                      width: "60%",
+                    }}
+                    animate={{ x: ["-100%", "200%"] }}
+                    transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
+                  />
+                </div>
+                <span className="text-[10px] font-mono" style={{ color: t.muted }}>
+                  Conjouring voice...
+                </span>
+              </div>
             </div>
+          )}
+
+          {explorationAudioUrl && (
+            <AudioPlayer
+              src={explorationAudioUrl}
+              accent={t.accent}
+              border={t.border}
+            />
           )}
         </div>
 
-        <div className="mt-auto pt-4 space-y-2">
+        <div className="mt-auto pt-2 space-y-2">
           <a
             href={mapsUrl({
               coordinates: "",
@@ -1713,7 +1714,7 @@ export default function App() {
               color: t.accent,
             }}
           >
-            <Navigation size={16} />
+            <Navigation size={18} />
             Navigate Here
           </a>
           <button
@@ -1722,7 +1723,7 @@ export default function App() {
             style={{
               backgroundColor: t.accent,
               color: "#fff",
-              boxShadow: `0 0 15px ${t.accentGlow}`,
+              boxShadow: `0 0 20px ${t.accentGlow}`,
             }}
           >
             <ArrowLeft size={18} />

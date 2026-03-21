@@ -70,3 +70,12 @@ export type AppStep =
   | 'lore'
   | 'exploration'
   | 'log';
+
+export type CameraState = 'loading' | 'active' | 'error' | 'permission-denied';
+
+export interface ScanResult {
+  landmarkDetected: boolean;
+  landmarkName: string;
+  lore: string;
+  boundingBox: { x: number; y: number; width: number; height: number } | null;
+}
