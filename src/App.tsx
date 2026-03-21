@@ -217,12 +217,12 @@ export default function App() {
   }, [config, completeItinerary]);
 
   const loreMutation = useMutation({
-    mutationFn: async (p: { image: string; location: string }) => {
+    mutationFn: async (p: { images: string[]; location: string }) => {
       const r = await fetch("/api/gemini", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          image: p.image ? p.image.split(",")[1] : "",
+          images: p.images,
           vibe: config.vibe,
           location: p.location,
           groupSize: config.groupSize,
@@ -232,6 +232,17 @@ export default function App() {
       return r.json() as Promise<{ lore: string }>;
     },
     onSuccess: (data) => {
+      if (data.lore === "INVALID_LOCATION") {
+        alert("The Oracle is confused. This doesn't look like the right place. Please try again.");
+        setProgress((prev) => {
+          const next = [...prev.stopProgress];
+          next[prev.currentStopIndex] = { ...next[prev.currentStopIndex], capturedImage: null, arrived: false };
+          return { ...prev, stopProgress: next };
+        });
+        setStep("hunt");
+        saveToSession("step", "hunt");
+        return;
+      }
       setProgress((prev) => {
         const next = [...prev.stopProgress];
         next[prev.currentStopIndex] = {
@@ -328,11 +339,17 @@ export default function App() {
 
   const handleCapture = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file || !stop) return;
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const b64 = reader.result as string;
+      const files = Array.from(e.target.files || []).slice(0, 3);
+      if (files.length === 0 || !stop) return;
+      const base64Promises = files.map(file => {
+         return new Promise<string>((resolve) => {
+           const reader = new FileReader();
+           reader.onloadend = () => resolve(reader.result as string);
+           reader.readAsDataURL(file);
+         });
+      });
+      Promise.all(base64Promises).then(b64Array => {
+        const b64 = b64Array[0];
         setProgress((prev) => {
           const next = [...prev.stopProgress];
           next[prev.currentStopIndex] = {
@@ -346,9 +363,8 @@ export default function App() {
         });
         setStep("analyzing");
         saveToSession("step", "analyzing");
-        loreMutation.mutate({ image: b64, location: stop.name });
-      };
-      reader.readAsDataURL(file);
+        loreMutation.mutate({ images: b64Array.map(b => b.split(",")[1]), location: stop.name });
+      });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [stop]
@@ -1075,8 +1091,8 @@ export default function App() {
 
           <input
             type="file"
-            accept="image/*"
-            capture="environment"
+            accept="image/*,video/*"
+            multiple
             className="hidden"
             onChange={handleCapture}
             ref={fileInputRef}
