@@ -4,7 +4,6 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { GoogleGenAI } from "@google/genai";
 import { 
   Camera, 
   ArrowLeft, 
@@ -72,7 +71,7 @@ const STOPS: Stop[] = [
 const Button = React.forwardRef<HTMLButtonElement, React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'outline' | 'ghost' }>(
   ({ className, variant = 'primary', ...props }, ref) => {
     const variants = {
-      primary: "bg-[#137fec] text-white shadow-[0_0_15px_rgba(19,127,236,0.3)] hover:bg-[#137fec]/90",
+      primary: "bg-[#3b82f6] text-white shadow-[0_0_15px_rgba(19,127,236,0.3)] hover:bg-[#3b82f6]/90",
       outline: "bg-transparent border border-[#F4F4F5] text-[#F4F4F5] hover:bg-white/5 shadow-[0_0_15px_rgba(250,250,250,0.15)]",
       ghost: "bg-transparent text-[#A1A1AA] hover:text-[#F4F4F5] hover:bg-[#27272A]/50"
     };
@@ -121,30 +120,23 @@ export default function App() {
     setStep(2);
     
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-      const model = "gemini-3-flash-preview";
-      
-      const prompt = `You are a theatrical narrator for an immersive scavenger hunt called "The Urban Alchemist". 
-      The current vibe is "${vibe}". 
-      The location is "${currentStop.name}". 
-      Analyze this photo taken by the user at the location. 
-      Generate a short, immersive 3-sentence lore piece about what they've found. 
-      Make it sound mysterious and atmospheric. 
-      Do not use markdown, just plain text.`;
-
-      const result = await ai.models.generateContent({
-        model,
-        contents: [
-          {
-            parts: [
-              { text: prompt },
-              { inlineData: { mimeType: "image/jpeg", data: base64Image.split(',')[1] } }
-            ]
-          }
-        ]
+      const response = await fetch('/api/gemini', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image: base64Image.split(',')[1],
+          vibe: vibe,
+          location: currentStop.name,
+          groupSize: groupSize
+        })
       });
 
-      const generatedText = result.text || "The artifact remains silent, but its presence is felt in the marrow of your bones.";
+      if (!response.ok) {
+        throw new Error('Gemini API request failed');
+      }
+
+      const data = await response.json();
+      const generatedText = data.lore;
       setLore(generatedText);
       
       // Generate Audio via Proxy
@@ -225,7 +217,7 @@ export default function App() {
                 className={cn(
                   "h-12 rounded-lg border transition-all text-sm font-medium",
                   vibe === v 
-                    ? "bg-[#137fec]/10 border-[#137fec] text-[#137fec]" 
+                    ? "bg-[#3b82f6]/10 border-[#3b82f6] text-[#3b82f6]" 
                     : "bg-[#09090B] border-[#27272A] text-[#A1A1AA] hover:border-[#A1A1AA]/50"
                 )}
               >
@@ -280,6 +272,20 @@ export default function App() {
         </div>
       </div>
 
+      {/* Progress Bar */}
+      <div className="mb-6">
+        <div className="flex justify-between text-xs text-[#A1A1AA] mb-2">
+          <span>Progress</span>
+          <span>Step {currentStopIndex + 1}/{STOPS.length}</span>
+        </div>
+        <div className="h-2 bg-[#27272A] rounded-full overflow-hidden">
+          <div 
+            className="h-full bg-[#3b82f6] rounded-full transition-all duration-500"
+            style={{ width: `${((currentStopIndex + 1) / STOPS.length) * 100}%` }}
+          />
+        </div>
+      </div>
+
       <div className="flex-1 flex flex-col items-center justify-center gap-8">
         <div className="w-full aspect-[3/4] bg-[#09090B] border border-[#27272A] rounded-3xl relative overflow-hidden flex flex-col items-center justify-center text-[#27272A]">
           <div className="absolute inset-8 border border-[#27272A]/30 rounded-lg pointer-events-none">
@@ -323,9 +329,9 @@ export default function App() {
         <motion.div 
           animate={{ scale: [1, 1.2, 1], opacity: [0.3, 0.6, 0.3] }}
           transition={{ duration: 2, repeat: Infinity }}
-          className="absolute inset-0 bg-[#137fec] blur-3xl rounded-full"
+          className="absolute inset-0 bg-[#3b82f6] blur-3xl rounded-full"
         />
-        <Loader2 size={48} className="animate-spin text-[#137fec] relative z-10" />
+        <Loader2 size={48} className="animate-spin text-[#3b82f6] relative z-10" />
       </div>
       <div className="text-center space-y-2">
         <h3 className="text-xl font-medium">Analyzing Artifact...</h3>
@@ -364,7 +370,7 @@ export default function App() {
                 setIsPlaying(!isPlaying);
               }
             }}
-            className="w-10 h-10 rounded-full bg-[#137fec] flex items-center justify-center text-white"
+            className="w-10 h-10 rounded-full bg-[#3b82f6] flex items-center justify-center text-white"
           >
             {isPlaying ? <Pause size={20} /> : <Play size={20} />}
           </button>
@@ -375,7 +381,7 @@ export default function App() {
                 key={i}
                 animate={isPlaying ? { height: [4, Math.random() * 20 + 4, 4] } : { height: 4 }}
                 transition={{ duration: 0.5, repeat: Infinity, delay: i * 0.05 }}
-                className={cn("w-1 rounded-full", i < 12 ? "bg-[#137fec]" : "bg-[#27272A]")}
+                className={cn("w-1 rounded-full", i < 12 ? "bg-[#3b82f6]" : "bg-[#27272A]")}
               />
             ))}
           </div>
@@ -391,7 +397,31 @@ export default function App() {
         </div>
       </div>
 
-      <div className="mt-auto pt-8">
+      {/* Next Location Info */}
+      {currentStopIndex < STOPS.length - 1 && (
+        <div className="mb-6 p-4 bg-[#09090B] border border-[#27272A] rounded-lg">
+          <div className="flex items-center gap-2 text-sm text-[#A1A1AA] mb-2">
+            <MapPin size={14} />
+            <span>Next Destination</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium">{STOPS[currentStopIndex + 1].name}</p>
+              <p className="text-xs text-[#A1A1AA]">{STOPS[currentStopIndex + 1].coordinates}</p>
+            </div>
+            <a
+              href={`https://www.google.com/maps/dir/?api=1&destination=${STOPS[currentStopIndex + 1].coordinates.replace('°', '').replace(/,/g, '')}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[#3b82f6] text-sm font-medium hover:underline"
+            >
+              Navigate
+            </a>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-auto pt-4">
         <Button onClick={nextStop} variant="outline" className="w-full">
           Next Destination <ArrowRight size={18} />
         </Button>
@@ -406,7 +436,7 @@ export default function App() {
       className="flex flex-col gap-8"
     >
       <div className="text-center space-y-2">
-        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-[#137fec]/10 text-[#137fec] mb-4">
+        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-[#3b82f6]/10 text-[#3b82f6] mb-4">
           <Sparkles size={32} />
         </div>
         <h2 className="text-3xl font-bold font-serif italic">Journey Complete</h2>
@@ -448,7 +478,7 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-[#000000] text-[#F4F4F5] font-sans selection:bg-[#137fec]/30">
+    <div className="min-h-screen bg-[#000000] text-[#F4F4F5] font-sans selection:bg-[#3b82f6]/30">
       {/* Header */}
       <header className="h-14 border-b border-[#27272A] flex items-center justify-between px-4 sticky top-0 bg-black/80 backdrop-blur-md z-50">
         {step > 0 && step < 4 ? (
@@ -480,8 +510,8 @@ export default function App() {
 
       {/* Background Glow */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden z-[-1]">
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-[#137fec]/5 blur-[120px] rounded-full" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-[#137fec]/5 blur-[120px] rounded-full" />
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-[#3b82f6]/5 blur-[120px] rounded-full" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-[#3b82f6]/5 blur-[120px] rounded-full" />
       </div>
     </div>
   );
