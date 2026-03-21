@@ -68,4 +68,5 @@ export type AppStep =
   | 'hunt'
   | 'analyzing'
   | 'lore'
+  | 'exploration'
   | 'log';

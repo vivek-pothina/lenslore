@@ -2,13 +2,23 @@ import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
   try {
-    const { text, voiceId = "21m00Tcm4lfs74WwtG2i" } = await request.json();
+    const { text, voiceId = "pNInz6obpgDQGcFmaJgB" } = await request.json();
     const apiKey = process.env.ELEVENLABS_API_KEY;
 
+    console.log("[tts] POST hit, text length:", text?.length, "key present:", !!apiKey);
+
     if (!apiKey) {
+      console.error("[tts] ELEVENLABS_API_KEY missing");
       return NextResponse.json(
         { error: "ELEVENLABS_API_KEY not configured" },
         { status: 500 }
+      );
+    }
+
+    if (!text) {
+      return NextResponse.json(
+        { error: "Missing required field: text" },
+        { status: 400 }
       );
     }
 
@@ -32,8 +42,12 @@ export async function POST(request: NextRequest) {
     );
 
     if (!response.ok) {
-      const errorData = await response.json();
-      return NextResponse.json(errorData, { status: response.status });
+      const errorText = await response.text();
+      console.error("[tts] ElevenLabs error:", response.status, errorText);
+      return new Response(errorText, {
+        status: response.status,
+        headers: { "Content-Type": "application/json" },
+      });
     }
 
     const arrayBuffer = await response.arrayBuffer();

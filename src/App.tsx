@@ -14,6 +14,7 @@ import {
   Share2,
   Compass,
   Navigation,
+  ChevronRight,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { clsx, type ClassValue } from "clsx";
@@ -28,6 +29,7 @@ import {
   type Itinerary,
   type StopProgress,
   type JourneyProgress,
+  type NearbySpot,
   type AppStep,
   CITIES,
   MEALS,
@@ -92,8 +94,8 @@ export default function App() {
       }
   );
   const [copied, setCopied] = useState(false);
-  const [expandedSpot, setExpandedSpot] = useState<string | null>(null);
-  const [spotLoreCache, setSpotLoreCache] = useState<Record<string, string>>({});
+  const [explorationSpot, setExplorationSpot] = useState<NearbySpot | null>(null);
+  const [explorationLore, setExplorationLore] = useState("");
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -341,13 +343,12 @@ export default function App() {
     [stop]
   );
 
-  const spotLoreMutation = useMutation({
-    mutationFn: async (spot: { name: string; type: string }) => {
+  const exploreLoreMutation = useMutation({
+    mutationFn: async (spot: NearbySpot) => {
       const r = await fetch("/api/gemini", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          image: "",
           vibe: config.vibe,
           location: spot.name,
           groupSize: config.groupSize,
@@ -356,23 +357,27 @@ export default function App() {
       if (!r.ok) throw new Error();
       return r.json() as Promise<{ lore: string }>;
     },
-    onSuccess: (data, spot) => {
-      setSpotLoreCache((prev) => ({ ...prev, [spot.name]: data.lore }));
+    onSuccess: (data) => {
+      setExplorationLore(data.lore);
     },
   });
 
-  const fetchSpotLore = useCallback(
-    (spotName: string, spotType: string) => {
-      if (spotLoreCache[spotName]) {
-        setExpandedSpot(expandedSpot === spotName ? null : spotName);
-        return;
-      }
-      setExpandedSpot(spotName);
-      spotLoreMutation.mutate({ name: spotName, type: spotType });
+  const exploreSpot = useCallback(
+    (spot: NearbySpot) => {
+      setExplorationSpot(spot);
+      setExplorationLore("");
+      setStep("exploration");
+      saveToSession("step", "exploration");
+      exploreLoreMutation.mutate(spot);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [expandedSpot, spotLoreCache]
+    []
   );
+
+  const backFromExploration = useCallback(() => {
+    setStep("lore");
+    saveToSession("step", "lore");
+  }, []);
 
   const startJourney = useCallback(() => {
     if (!itinerary) return;
@@ -430,6 +435,7 @@ export default function App() {
       hunt: "preview",
       analyzing: "hunt",
       lore: "hunt",
+      exploration: "lore",
       log: "welcome",
       welcome: "welcome",
     };
@@ -1137,17 +1143,11 @@ export default function App() {
                     transition={{ delay: i * 0.1 }}
                   >
                     <button
-                      onClick={() => fetchSpotLore(spot.name, spot.type)}
+                      onClick={() => exploreSpot(spot)}
                       className="w-full text-left rounded-lg border p-4 transition-all active:scale-[0.99]"
                       style={{
-                        backgroundColor:
-                          expandedSpot === spot.name
-                            ? t.accentLight
-                            : t.surface,
-                        borderColor:
-                          expandedSpot === spot.name
-                            ? t.accent
-                            : t.border,
+                        backgroundColor: t.surface,
+                        borderColor: t.border,
                       }}
                     >
                       <div className="flex items-start gap-3">
@@ -1155,47 +1155,19 @@ export default function App() {
                           {stopIcon(spot.type)}
                         </span>
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between">
-                            <p className="font-medium text-sm">
-                              {spot.name}
-                            </p>
-                            {spotLoreMutation.isPending &&
-                              expandedSpot === spot.name && (
-                                <Loader2
-                                  size={14}
-                                  className="animate-spin shrink-0"
-                                  style={{ color: t.accent }}
-                                />
-                              )}
-                          </div>
+                          <p className="font-medium text-sm">{spot.name}</p>
                           <p
                             className="text-xs mt-1"
                             style={{ color: t.muted }}
                           >
                             {spot.shortDescription}
                           </p>
-                          {expandedSpot === spot.name &&
-                            spotLoreCache[spot.name] && (
-                              <p
-                                className="text-xs mt-3 leading-relaxed italic"
-                                style={{
-                                  color: t.foreground,
-                                  opacity: 0.85,
-                                }}
-                              >
-                                &ldquo;{spotLoreCache[spot.name]}&rdquo;
-                              </p>
-                            )}
                         </div>
-                        <span
-                          className="text-[10px] font-mono uppercase shrink-0 mt-1 px-2 py-0.5 rounded"
-                          style={{
-                            backgroundColor: t.accentLight,
-                            color: t.accent,
-                          }}
-                        >
-                          {spot.type}
-                        </span>
+                        <ChevronRight
+                          size={16}
+                          className="shrink-0 mt-1"
+                          style={{ color: t.muted }}
+                        />
                       </div>
                     </button>
                   </motion.div>
@@ -1270,6 +1242,122 @@ export default function App() {
             style={{ color: t.muted }}
           >
             End Journey Early
+          </button>
+        </div>
+      </motion.div>
+    );
+  };
+
+  const renderExploration = () => {
+    if (!explorationSpot) return null;
+    return (
+      <motion.div
+        key="exploration"
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -20 }}
+        className="flex flex-col h-full"
+      >
+        <div className="flex gap-4 mb-6">
+          <div
+            className="w-16 h-16 shrink-0 rounded-xl flex items-center justify-center text-2xl border"
+            style={{
+              backgroundColor: t.accentLight,
+              borderColor: t.accent,
+            }}
+          >
+            {stopIcon(explorationSpot.type)}
+          </div>
+          <div className="flex flex-col justify-center">
+            <h2 className="text-xl font-semibold">{explorationSpot.name}</h2>
+            <span
+              className="text-[10px] font-mono uppercase px-2 py-0.5 rounded w-fit mt-1"
+              style={{
+                backgroundColor: t.accentLight,
+                color: t.accent,
+              }}
+            >
+              {explorationSpot.type}
+            </span>
+          </div>
+        </div>
+
+        <div
+          className="rounded-xl border p-5 mb-6"
+          style={{ backgroundColor: t.surface, borderColor: t.border }}
+        >
+          <p
+            className="text-sm italic leading-relaxed"
+            style={{ color: t.muted }}
+          >
+            &ldquo;{explorationSpot.shortDescription}&rdquo;
+          </p>
+        </div>
+
+        <div className="flex-1">
+          {exploreLoreMutation.isPending && !explorationLore && (
+            <div className="flex flex-col items-center justify-center gap-4 py-12">
+              <div className="relative">
+                <motion.div
+                  animate={{ scale: [1, 1.2, 1], opacity: [0.3, 0.6, 0.3] }}
+                  transition={{ duration: 2, repeat: Infinity }}
+                  className="absolute inset-0 blur-3xl rounded-full"
+                  style={{ backgroundColor: t.accent }}
+                />
+                <Loader2
+                  size={32}
+                  className="animate-spin relative z-10"
+                  style={{ color: t.accent }}
+                />
+              </div>
+              <p
+                className="text-sm font-mono uppercase"
+                style={{ color: t.muted }}
+              >
+                Uncovering secrets...
+              </p>
+            </div>
+          )}
+
+          {explorationLore && (
+            <div className="space-y-4">
+              <p className="text-base font-serif leading-relaxed italic">
+                &ldquo;{explorationLore}&rdquo;
+              </p>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-auto pt-4 space-y-2">
+          <a
+            href={mapsUrl({
+              coordinates: "",
+              address: explorationSpot.name,
+              name: explorationSpot.name,
+            })}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="w-full h-12 rounded-lg border font-medium transition-all active:scale-[0.98] flex items-center justify-center gap-2 no-underline"
+            style={{
+              backgroundColor: t.surface,
+              borderColor: t.accent,
+              color: t.accent,
+            }}
+          >
+            <Navigation size={16} />
+            Navigate Here
+          </a>
+          <button
+            onClick={backFromExploration}
+            className="w-full h-12 rounded-lg font-medium transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+            style={{
+              backgroundColor: t.accent,
+              color: "#fff",
+              boxShadow: `0 0 15px ${t.accentGlow}`,
+            }}
+          >
+            <ArrowLeft size={18} />
+            Back to {stop?.name || "Quest"}
           </button>
         </div>
       </motion.div>
@@ -1462,6 +1550,7 @@ export default function App() {
           {step === "hunt" && renderHunt()}
           {step === "analyzing" && renderAnalyzing()}
           {step === "lore" && renderLore()}
+          {step === "exploration" && renderExploration()}
           {step === "log" && renderLog()}
         </AnimatePresence>
       </main>

@@ -39,11 +39,26 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    if (!image || !vibe || !location) {
+    if (!vibe || !location) {
       return NextResponse.json(
-        { error: "Missing required fields: image, vibe, location" },
+        { error: "Missing required fields: vibe, location" },
         { status: 400 }
       );
+    }
+
+    if (!image) {
+      const prompt = `You are a theatrical narrator for an immersive scavenger hunt called "The Urban Alchemist". Vibe: "${vibe}". Location: "${location}". Group: ${groupSize} explorer${groupSize > 1 ? "s" : ""}. Generate 3 sentences of immersive lore about this place in the ${vibe} style. Mysterious and atmospheric. No markdown, plain text.`;
+
+      const result = await ai.models.generateContent({
+        model,
+        contents: [{ parts: [{ text: prompt }] }],
+      });
+
+      return NextResponse.json({
+        lore:
+          result.text ||
+          "The artifact remains silent, but its presence is felt in the marrow of your bones.",
+      });
     }
 
     const prompt = `You are a theatrical narrator for an immersive scavenger hunt called "The Urban Alchemist". Vibe: "${vibe}". Location: "${location}". Group: ${groupSize} explorer${groupSize > 1 ? "s" : ""}. Analyze this photo. Generate 3 sentences of immersive lore in the ${vibe} style. Mysterious and atmospheric. No markdown, plain text.`;
