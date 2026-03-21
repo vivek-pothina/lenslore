@@ -1,0 +1,7 @@
+{
+  "name": "LensLore: The Urban Alchemist",
+  "description": "An immersive AI-powered scavenger hunt that turns real-world landmarks into theatrical lore using Gemini Vision and ElevenLabs.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
