@@ -3,7 +3,8 @@ import { GoogleGenAI } from "@google/genai";
 
 export async function POST(request: NextRequest) {
   try {
-    const { image, vibe, location, groupSize = 1 } = await request.json();
+    const { image, images, vibe, location, groupSize = 1, adventureLog } =
+      await request.json();
     const apiKey = process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
@@ -13,6 +14,31 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const ai = new GoogleGenAI({ apiKey });
+    const model = "gemini-3-flash-preview";
+
+    if (adventureLog && images?.length) {
+      const systemPrompt = `You are "The Urban Alchemist", a D&D dungeon master narrating the conclusion of an urban adventure. Vibe: "${vibe}". Write a cohesive 4-paragraph adventure log in ${vibe} style. Reference each location from the photos. Make it feel like a legendary campaign recap. No markdown, plain text with paragraph breaks.`;
+
+      const parts: any[] = [{ text: systemPrompt }];
+      for (const img of images) {
+        parts.push({
+          inlineData: { mimeType: "image/jpeg", data: img },
+        });
+      }
+
+      const result = await ai.models.generateContent({
+        model,
+        contents: [{ parts }],
+      });
+
+      return NextResponse.json({
+        lore:
+          result.text ||
+          "Your adventure fades into legend, remembered only by the echoes in the alleyways.",
+      });
+    }
+
     if (!image || !vibe || !location) {
       return NextResponse.json(
         { error: "Missing required fields: image, vibe, location" },
@@ -20,18 +46,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const ai = new GoogleGenAI({ apiKey });
-    const model = "gemini-3-flash-preview";
-
-    const prompt = `You are a theatrical narrator for an immersive scavenger hunt called "The Urban Alchemist". 
-    The current vibe is "${vibe}". 
-    The location is "${location}". 
-    The group size is ${groupSize} explorer${groupSize > 1 ? 's' : ''}.
-    Analyze this photo taken by the user at the location. 
-    Generate a short, immersive 3-sentence lore piece about what they've found. 
-    Make it sound mysterious and atmospheric. 
-    ${groupSize > 1 ? 'Address the group appropriately.' : ''}
-    Do not use markdown, just plain text.`;
+    const prompt = `You are a theatrical narrator for an immersive scavenger hunt called "The Urban Alchemist". Vibe: "${vibe}". Location: "${location}". Group: ${groupSize} explorer${groupSize > 1 ? "s" : ""}. Analyze this photo. Generate 3 sentences of immersive lore in the ${vibe} style. Mysterious and atmospheric. No markdown, plain text.`;
 
     const result = await ai.models.generateContent({
       model,
@@ -39,15 +54,17 @@ export async function POST(request: NextRequest) {
         {
           parts: [
             { text: prompt },
-            { inlineData: { mimeType: "image/jpeg", data: image } }
-          ]
-        }
-      ]
+            { inlineData: { mimeType: "image/jpeg", data: image } },
+          ],
+        },
+      ],
     });
 
-    const generatedText = result.text || "The artifact remains silent, but its presence is felt in the marrow of your bones.";
-    
-    return NextResponse.json({ lore: generatedText });
+    return NextResponse.json({
+      lore:
+        result.text ||
+        "The artifact remains silent, but its presence is felt in the marrow of your bones.",
+    });
   } catch (error) {
     console.error("Gemini API Error:", error);
     return NextResponse.json(

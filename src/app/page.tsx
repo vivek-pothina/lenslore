@@ -1,10 +1,18 @@
 "use client";
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 
-// Import the main app component with SSR disabled
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: 1 } },
+});
+
 const App = dynamic(() => import("@/src/App"), { ssr: false });
 
 export default function Home() {
-  return <App />;
+  return (
+    <QueryClientProvider client={queryClient}>
+      <App />
+    </QueryClientProvider>
+  );
 }

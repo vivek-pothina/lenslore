@@ -1,429 +1,1480 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
+import React, { useState, useRef, useCallback, useMemo } from "react";
+import {
+  Camera,
+  ArrowLeft,
+  ArrowRight,
+  Play,
+  Pause,
+  Loader2,
+  Plus,
+  Minus,
+  CheckCircle,
+  MapPin,
+  Sparkles,
+  Share2,
+  Compass,
+  Navigation,
+} from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+import { useCompletion } from "@ai-sdk/react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { themes } from "./theme";
+import {
+  type Vibe,
+  type TransitMode,
+  type JourneyConfig,
+  type Itinerary,
+  type StopProgress,
+  type JourneyProgress,
+  type AppStep,
+  CITIES,
+  MEALS,
+} from "./lib/types";
+import { saveToSession, loadFromSession } from "./lib/session";
 
-import React, { useState, useRef } from 'react';
-import { Camera, ArrowLeft, ArrowRight, Play, Pause, Loader2, User, Plus, Minus, CheckCircle, MapPin, Sparkles } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
-import { clsx, type ClassValue } from 'clsx';
-import { twMerge } from 'tailwind-merge';
-import { themes, type Vibe, type ThemeColors } from './theme';
-
-// --- Utility ---
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-// --- Types ---
-interface Stop {
-  id: number;
-  name: string;
-  location: string;
-  era: string;
-  coordinates: string;
-  imageHint: string;
+function parseJsonFromStream(text: string): Itinerary | null {
+  if (!text) return null;
+  const cleaned = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+  if (!cleaned.startsWith("{")) return null;
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]);
+      } catch {}
+    }
+    return null;
+  }
 }
 
-const STOPS: Stop[] = [
-  { id: 1, name: "FIT Museum", location: "Seventh Ave at 27 St", era: "20th Century Fashion", coordinates: "40.7465° N, 73.9942° W", imageHint: "A grand entrance or a window display of style." },
-  { id: 2, name: "The High Line", location: "Chelsea Section", era: "Industrial Rebirth", coordinates: "40.7480° N, 74.0048° W", imageHint: "Elevated steel and urban greenery." },
-  { id: 3, name: "Chelsea Market", location: "75 9th Ave", era: "Victorian Industrial", coordinates: "40.7423° N, 74.0061° W", imageHint: "Exposed brick and ironwork." },
-];
-
-// --- Themed Components ---
-
-function Button({
-  className, variant = 'primary', theme, ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'outline' | 'ghost'; theme: ThemeColors }) {
-  const style = {
-    primary: { background: theme.accent, color: '#fff', boxShadow: `0 0 15px ${theme.accentGlow}` },
-    outline: { background: 'transparent', borderColor: theme.foreground, color: theme.foreground, boxShadow: `0 0 15px ${theme.glowColor}` },
-    ghost: { background: 'transparent', color: theme.muted },
-  }[variant];
-
-  const hoverClass = {
-    primary: 'hover:brightness-110',
-    outline: 'hover:brightness-110',
-    ghost: 'hover:brightness-125',
-  }[variant];
-
-  return (
-    <button
-      className={cn(
-        "h-12 px-6 rounded-lg font-medium transition-all active:scale-[0.98] flex items-center justify-center gap-2 disabled:opacity-50 disabled:pointer-events-none border",
-        variant === 'outline' ? 'border' : 'border-transparent',
-        hoverClass,
-        className
-      )}
-      style={style}
-      {...props}
-    />
-  );
+function stopIcon(type: string) {
+  return type === "restaurant" ? "🍽️" : type === "activity" ? "⚔️" : "📍";
 }
 
-function Card({ children, className, theme }: { children: React.ReactNode; className?: string; theme: ThemeColors }) {
-  return (
-    <div className={cn("rounded-xl overflow-hidden", className)} style={{ background: theme.surface, borderColor: theme.border, borderWidth: 1, borderStyle: 'solid' }}>
-      {children}
-    </div>
-  );
+function mapsUrl(s: { coordinates: string; address: string; name: string }) {
+  return `https://www.google.com/maps/dir/?api=1&destination=${s.coordinates || encodeURIComponent(`${s.name}, ${s.address}`)}`;
 }
-
-// --- Main App ---
 
 export default function App() {
-  const [step, setStep] = useState<0 | 1 | 2 | 3 | 4>(0);
-  const [vibe, setVibe] = useState<Vibe>('Cyberpunk');
-  const [groupSize, setGroupSize] = useState(1);
-  const [currentStopIndex, setCurrentStopIndex] = useState(0);
-  const [capturedImage, setCapturedImage] = useState<string | null>(null);
-  const [lore, setLore] = useState<string>('');
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [step, setStep] = useState<AppStep>(
+    () => loadFromSession<AppStep>("step") || "welcome"
+  );
+  const [config, setConfig] = useState<JourneyConfig>(
+    () =>
+      loadFromSession<JourneyConfig>("config") || {
+        vibe: "Cyberpunk",
+        city: "",
+        groupSize: 1,
+        numStops: 4,
+        transitMode: "transit",
+        meals: [],
+        customPrompt: "",
+      }
+  );
+  const [itinerary, setItinerary] = useState<Itinerary | null>(
+    () => loadFromSession<Itinerary>("itinerary")
+  );
+  const [progress, setProgress] = useState<JourneyProgress>(
+    () =>
+      loadFromSession<JourneyProgress>("progress") || {
+        currentStopIndex: 0,
+        stopProgress: [],
+        startTime: null,
+        completedAt: null,
+      }
+  );
+  const [copied, setCopied] = useState(false);
+  const [expandedSpot, setExpandedSpot] = useState<string | null>(null);
+  const [spotLoreCache, setSpotLoreCache] = useState<Record<string, string>>({});
 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const t = themes[vibe];
-  const currentStop = STOPS[currentStopIndex];
+  const t = themes[config.vibe];
+  const stop = itinerary?.stops[progress.currentStopIndex];
+  const sp = progress.stopProgress[progress.currentStopIndex];
+  const isLast = itinerary
+    ? progress.currentStopIndex >= itinerary.stops.length - 1
+    : false;
 
-  // --- AI Logic ---
-
-  const generateLore = async (base64Image: string) => {
-    setIsGenerating(true);
-    setStep(2);
+  const sharedConfig = useMemo(() => {
+    if (typeof window === "undefined") return null;
+    const p = new URLSearchParams(window.location.search).get("j");
+    if (!p) return null;
     try {
-      const response = await fetch('/api/gemini', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: base64Image.split(',')[1], vibe, location: currentStop.name, groupSize }),
-      });
-      if (!response.ok) throw new Error('Gemini API request failed');
-      const data = await response.json();
-      setLore(data.lore);
-
-      try {
-        const ttsResponse = await fetch('/api/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: data.lore }),
-        });
-        if (ttsResponse.ok) {
-          const blob = await ttsResponse.blob();
-          setAudioUrl(URL.createObjectURL(blob));
-        }
-      } catch (e) {
-        console.error('TTS failed', e);
-      }
-      setStep(3);
-    } catch (error) {
-      console.error('AI Error:', error);
-      setLore('The shadows refuse to speak today. Proceed to the next coordinate.');
-      setStep(3);
-    } finally {
-      setIsGenerating(false);
+      return JSON.parse(atob(p)) as JourneyConfig;
+    } catch {
+      return null;
     }
-  };
+  }, []);
 
-  const handleCapture = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
+  useMemo(() => {
+    if (sharedConfig) {
+      setConfig(sharedConfig);
+      setStep("planning");
+      saveToSession("config", sharedConfig);
+      saveToSession("step", "planning");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const geoQuery = useQuery({
+    queryKey: ["geo"],
+    queryFn: (): Promise<string> =>
+      new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(
+          async (pos) => {
+            try {
+              const r = await fetch(
+                `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${pos.coords.latitude}&longitude=${pos.coords.longitude}&localityLanguage=en`
+              );
+              const d = await r.json();
+              const city = d.city || d.locality || "";
+              resolve(
+                CITIES.find((c) =>
+                  c.toLowerCase().includes(city.toLowerCase().split(" ")[0])
+                ) || city || "New York City"
+              );
+            } catch {
+              resolve("New York City");
+            }
+          },
+          () => reject(new Error("denied")),
+          { timeout: 8000 }
+        );
+      }),
+    enabled: false,
+    retry: 0,
+  });
+
+  const detectCity = useCallback(() => {
+    geoQuery.refetch().then((r) => {
+      if (r.data) updateConfig({ city: r.data });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const {
+    completion,
+    isLoading: streaming,
+    error: streamError,
+    complete: completeItinerary,
+  } = useCompletion({
+    api: "/api/itinerary",
+    streamProtocol: "text",
+    onFinish: (_prompt: string, text: string) => {
+      console.log("[useCompletion] onFinish, text length:", text.length);
+      console.log("[useCompletion] raw text:", text.slice(0, 500));
+      const parsed = parseJsonFromStream(text);
+      console.log("[useCompletion] parsed:", parsed);
+      if (parsed) {
+        setItinerary(parsed);
+        saveToSession("itinerary", parsed);
+      }
+    },
+    onError: (err: Error) => {
+      console.error("[useCompletion] error:", err);
+    },
+  });
+
+  const streamedItinerary = useMemo(
+    () => {
+      const p = parseJsonFromStream(completion);
+      if (p) console.log("[streamedItinerary] parsed stops:", p.stops?.length);
+      return p;
+    },
+    [completion]
+  );
+
+  const generateItinerary = useCallback(() => {
+    console.log("[generateItinerary] called, config:", config);
+    console.log("[generateItinerary] calling completeItinerary");
+    completeItinerary("", { body: { ...config } });
+    setStep("planning");
+    saveToSession("step", "planning");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config, completeItinerary]);
+
+  const loreMutation = useMutation({
+    mutationFn: async (p: { image: string; location: string }) => {
+      const r = await fetch("/api/gemini", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image: p.image ? p.image.split(",")[1] : "",
+          vibe: config.vibe,
+          location: p.location,
+          groupSize: config.groupSize,
+        }),
+      });
+      if (!r.ok) throw new Error();
+      return r.json() as Promise<{ lore: string }>;
+    },
+    onSuccess: (data) => {
+      setProgress((prev) => {
+        const next = [...prev.stopProgress];
+        next[prev.currentStopIndex] = {
+          ...next[prev.currentStopIndex],
+          lore: data.lore,
+        };
+        const u = { ...prev, stopProgress: next };
+        saveToSession("progress", u);
+        return u;
+      });
+      ttsMutation.mutate(data.lore);
+      setStep("lore");
+      saveToSession("step", "lore");
+    },
+    onError: () => {
+      setProgress((prev) => {
+        const next = [...prev.stopProgress];
+        next[prev.currentStopIndex] = {
+          ...next[prev.currentStopIndex],
+          lore: "The artifact reveals its secrets only to the worthy. The echoes of this place linger in your memory.",
+        };
+        const u = { ...prev, stopProgress: next };
+        saveToSession("progress", u);
+        return u;
+      });
+      setStep("lore");
+      saveToSession("step", "lore");
+    },
+  });
+
+  const ttsMutation = useMutation({
+    mutationFn: async (text: string) => {
+      const r = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!r.ok) throw new Error();
+      return r.blob();
+    },
+    onSuccess: (blob) => {
+      const url = URL.createObjectURL(blob);
+      setProgress((prev) => {
+        const next = [...prev.stopProgress];
+        next[prev.currentStopIndex] = {
+          ...next[prev.currentStopIndex],
+          audioUrl: url,
+        };
+        const u = { ...prev, stopProgress: next };
+        saveToSession("progress", u);
+        return u;
+      });
+    },
+  });
+
+  const finalLoreMutation = useMutation({
+    mutationFn: async () => {
+      const images = progress.stopProgress
+        .filter((s) => s.capturedImage)
+        .map((s) => s.capturedImage!.split(",")[1]);
+      const r = await fetch("/api/gemini", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          images,
+          vibe: config.vibe,
+          adventureLog: true,
+          stops: itinerary?.stops.map((s) => ({
+            name: s.name,
+            description: s.description,
+          })),
+        }),
+      });
+      if (!r.ok) throw new Error();
+      return r.json() as Promise<{ lore: string }>;
+    },
+    onSuccess: (data) => {
+      saveToSession("finalLore", data.lore);
+      setProgress((prev) => {
+        const u = { ...prev, completedAt: Date.now() };
+        saveToSession("progress", u);
+        return u;
+      });
+    },
+  });
+
+  const updateConfig = useCallback((p: Partial<JourneyConfig>) => {
+    setConfig((prev) => {
+      const n = { ...prev, ...p };
+      saveToSession("config", n);
+      return n;
+    });
+  }, []);
+
+  const handleCapture = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file || !stop) return;
       const reader = new FileReader();
       reader.onloadend = () => {
-        const base64 = reader.result as string;
-        setCapturedImage(base64);
-        generateLore(base64);
+        const b64 = reader.result as string;
+        setProgress((prev) => {
+          const next = [...prev.stopProgress];
+          next[prev.currentStopIndex] = {
+            ...next[prev.currentStopIndex],
+            capturedImage: b64,
+            arrived: true,
+          };
+          const u = { ...prev, stopProgress: next };
+          saveToSession("progress", u);
+          return u;
+        });
+        setStep("analyzing");
+        saveToSession("step", "analyzing");
+        loreMutation.mutate({ image: b64, location: stop.name });
       };
       reader.readAsDataURL(file);
-    }
-  };
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stop]
+  );
 
-  const nextStop = () => {
-    if (currentStopIndex < STOPS.length - 1) {
-      setCurrentStopIndex(prev => prev + 1);
-      setStep(1);
-      setLore('');
-      setAudioUrl(null);
-      setCapturedImage(null);
-      setIsPlaying(false);
+  const spotLoreMutation = useMutation({
+    mutationFn: async (spot: { name: string; type: string }) => {
+      const r = await fetch("/api/gemini", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image: "",
+          vibe: config.vibe,
+          location: spot.name,
+          groupSize: config.groupSize,
+        }),
+      });
+      if (!r.ok) throw new Error();
+      return r.json() as Promise<{ lore: string }>;
+    },
+    onSuccess: (data, spot) => {
+      setSpotLoreCache((prev) => ({ ...prev, [spot.name]: data.lore }));
+    },
+  });
+
+  const fetchSpotLore = useCallback(
+    (spotName: string, spotType: string) => {
+      if (spotLoreCache[spotName]) {
+        setExpandedSpot(expandedSpot === spotName ? null : spotName);
+        return;
+      }
+      setExpandedSpot(spotName);
+      spotLoreMutation.mutate({ name: spotName, type: spotType });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [expandedSpot, spotLoreCache]
+  );
+
+  const startJourney = useCallback(() => {
+    if (!itinerary) return;
+    const sp: StopProgress[] = itinerary.stops.map((s) => ({
+      stopId: s.id,
+      arrived: false,
+      capturedImage: null,
+      lore: "",
+      audioUrl: null,
+    }));
+    const u: JourneyProgress = {
+      currentStopIndex: 0,
+      stopProgress: sp,
+      startTime: Date.now(),
+      completedAt: null,
+    };
+    setProgress(u);
+    saveToSession("progress", u);
+    setStep("hunt");
+    saveToSession("step", "hunt");
+  }, [itinerary]);
+
+  const nextStop = useCallback(() => {
+    if (!itinerary) return;
+    if (audioRef.current) audioRef.current.pause();
+    if (progress.currentStopIndex < itinerary.stops.length - 1) {
+      setProgress((prev) => {
+        const u = { ...prev, currentStopIndex: prev.currentStopIndex + 1 };
+        saveToSession("progress", u);
+        return u;
+      });
+      setStep("hunt");
+      saveToSession("step", "hunt");
     } else {
-      setStep(4);
+      finalLoreMutation.mutate();
+      setStep("log");
+      saveToSession("step", "log");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itinerary, progress.currentStopIndex]);
+
+  const endJourney = useCallback(() => {
+    if (audioRef.current) audioRef.current.pause();
+    finalLoreMutation.mutate();
+    setStep("log");
+    saveToSession("step", "log");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const goBack = useCallback(() => {
+    if (audioRef.current) audioRef.current.pause();
+    const map: Record<AppStep, AppStep> = {
+      planning: "welcome",
+      preview: "welcome",
+      hunt: "preview",
+      analyzing: "hunt",
+      lore: "hunt",
+      log: "welcome",
+      welcome: "welcome",
+    };
+    const to = map[step];
+    setStep(to);
+    saveToSession("step", to);
+  }, [step]);
+
+  const shareUrl = useMemo(() => {
+    try {
+      return `${window.location.origin}?j=${btoa(JSON.stringify(config))}`;
+    } catch {
+      return window.location.origin;
+    }
+  }, [config]);
+
+  const handleShare = useCallback(() => {
+    navigator.clipboard.writeText(shareUrl).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [shareUrl]);
+
+  const resetJourney = useCallback(() => {
+    sessionStorage.clear();
+    const fresh: JourneyConfig = {
+      vibe: "Cyberpunk",
+      city: "",
+      groupSize: 1,
+      numStops: 4,
+      transitMode: "transit",
+      meals: [],
+      customPrompt: "",
+    };
+    setConfig(fresh);
+    setItinerary(null);
+    setProgress({
+      currentStopIndex: 0,
+      stopProgress: [],
+      startTime: null,
+      completedAt: null,
+    });
+    setStep("welcome");
+    saveToSession("step", "welcome");
+  }, []);
+
+  const elapsed = useMemo(() => {
+    if (!progress.startTime) return "0m";
+    const end = progress.completedAt || Date.now();
+    const m = Math.round((end - progress.startTime) / 60000);
+    return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`;
+  }, [progress.startTime, progress.completedAt]);
+
+  const parsed = streamedItinerary || itinerary;
+  const finalLore = loadFromSession<string>("finalLore") || "";
+
+  const fieldStyle = {
+    backgroundColor: t.surface,
+    borderColor: t.border,
+    color: t.foreground,
   };
 
-  // --- Render Helpers ---
+  // --- Renders ---
 
-  const renderSetup = () => (
-    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="flex flex-col gap-8">
-      <div className="space-y-2">
-        <h2 className="text-2xl font-semibold tracking-tight" style={{ color: t.foreground }}>Configure Journey</h2>
-        <p style={{ color: t.muted }}>Set the parameters for your urban exploration.</p>
+  const renderWelcome = () => (
+    <motion.div
+      key="welcome"
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20 }}
+      className="flex flex-col gap-8"
+    >
+      <div className="space-y-1">
+        <h2 className="text-2xl font-semibold tracking-tight">
+          Begin Your Quest
+        </h2>
+        <p className="text-sm" style={{ color: t.muted }}>
+          Configure your urban adventure.
+        </p>
       </div>
 
       <div className="space-y-6">
-        <div className="space-y-3">
-          <label className="block text-xs font-mono uppercase tracking-widest" style={{ color: t.muted }}>Journey Vibe</label>
+        <fieldset className="space-y-3">
+          <label
+            className="block text-xs font-mono uppercase tracking-widest"
+            style={{ color: t.muted }}
+          >
+            Vibe
+          </label>
           <div className="grid grid-cols-2 gap-2">
-            {(['Cyberpunk', 'Noir', 'Fantasy', 'Historical'] as Vibe[]).map(v => {
-              const isActive = vibe === v;
-              const vt = themes[v];
-              return (
+            {(["Cyberpunk", "Noir", "Fantasy", "Historical"] as Vibe[]).map(
+              (v) => {
+                const vt = themes[v];
+                const active = config.vibe === v;
+                return (
+                  <button
+                    key={v}
+                    onClick={() => updateConfig({ vibe: v })}
+                    className="h-12 rounded-lg border transition-all text-sm font-medium"
+                    style={{
+                      backgroundColor: active ? vt.accentLight : vt.surface,
+                      borderColor: active ? vt.accent : vt.border,
+                      color: active ? vt.accent : vt.muted,
+                    }}
+                  >
+                    {v}
+                  </button>
+                );
+              }
+            )}
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-3">
+          <label
+            className="block text-xs font-mono uppercase tracking-widest"
+            style={{ color: t.muted }}
+          >
+            City
+          </label>
+          <div className="flex gap-2">
+            <select
+              value={config.city}
+              onChange={(e) => updateConfig({ city: e.target.value })}
+              className="flex-1 h-12 rounded-lg border px-4 text-sm appearance-none cursor-pointer"
+              style={fieldStyle}
+            >
+              <option value="">Select city...</option>
+              {CITIES.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={detectCity}
+              disabled={geoQuery.isFetching}
+              className="h-12 px-4 rounded-lg border text-sm font-medium transition-all flex items-center gap-2"
+              style={{
+                backgroundColor: t.surface,
+                borderColor: t.border,
+                color: t.accent,
+              }}
+            >
+              {geoQuery.isFetching ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <Navigation size={16} />
+              )}
+              Detect
+            </button>
+          </div>
+        </fieldset>
+
+        <div className="grid grid-cols-2 gap-4">
+          {[
+            { label: "Group", value: config.groupSize, set: (v: number) => updateConfig({ groupSize: Math.max(1, v) }) },
+            { label: "Stops", value: config.numStops, set: (v: number) => updateConfig({ numStops: Math.max(1, Math.min(10, v)) }) },
+          ].map((f) => (
+            <fieldset key={f.label} className="space-y-3">
+              <label
+                className="block text-xs font-mono uppercase tracking-widest"
+                style={{ color: t.muted }}
+              >
+                {f.label}
+              </label>
+              <div
+                className="flex items-center justify-between rounded-lg border p-2 h-12"
+                style={fieldStyle}
+              >
                 <button
-                  key={v}
-                  onClick={() => setVibe(v)}
-                  className="h-12 rounded-lg border transition-all text-sm font-medium"
+                  onClick={() => f.set(f.value - 1)}
+                  className="w-8 h-8 flex items-center justify-center rounded border"
                   style={{
-                    background: isActive ? vt.accentLight : vt.surface,
-                    borderColor: isActive ? vt.accent : vt.border,
-                    color: isActive ? vt.accent : vt.muted,
+                    backgroundColor: t.background,
+                    borderColor: t.border,
+                    color: t.muted,
                   }}
                 >
-                  {v}
+                  <Minus size={14} />
+                </button>
+                <span className="font-medium tabular-nums">{f.value}</span>
+                <button
+                  onClick={() => f.set(f.value + 1)}
+                  className="w-8 h-8 flex items-center justify-center rounded border"
+                  style={{
+                    backgroundColor: t.background,
+                    borderColor: t.border,
+                    color: t.muted,
+                  }}
+                >
+                  <Plus size={14} />
+                </button>
+              </div>
+            </fieldset>
+          ))}
+        </div>
+
+        <fieldset className="space-y-3">
+          <label
+            className="block text-xs font-mono uppercase tracking-widest"
+            style={{ color: t.muted }}
+          >
+            Travel Mode
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            {(["transit", "car"] as TransitMode[]).map((m) => (
+              <button
+                key={m}
+                onClick={() => updateConfig({ transitMode: m })}
+                className="h-12 rounded-lg border transition-all text-sm font-medium"
+                style={{
+                  backgroundColor:
+                    config.transitMode === m ? t.accentLight : t.surface,
+                  borderColor:
+                    config.transitMode === m ? t.accent : t.border,
+                  color: config.transitMode === m ? t.accent : t.muted,
+                }}
+              >
+                {m === "transit" ? "🚇 Transit" : "🚗 Car"}
+              </button>
+            ))}
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-3">
+          <label
+            className="block text-xs font-mono uppercase tracking-widest"
+            style={{ color: t.muted }}
+          >
+            Fuel Up
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {MEALS.map((m) => {
+              const active = config.meals.includes(m.value);
+              return (
+                <button
+                  key={m.value}
+                  onClick={() =>
+                    updateConfig({
+                      meals: active
+                        ? config.meals.filter((x) => x !== m.value)
+                        : [...config.meals, m.value],
+                    })
+                  }
+                  className="h-10 px-4 rounded-lg border transition-all text-sm font-medium"
+                  style={{
+                    backgroundColor: active ? t.accentLight : t.surface,
+                    borderColor: active ? t.accent : t.border,
+                    color: active ? t.accent : t.muted,
+                  }}
+                >
+                  {m.icon} {m.label}
                 </button>
               );
             })}
           </div>
-        </div>
+        </fieldset>
 
-        <div className="space-y-3">
-          <label className="block text-xs font-mono uppercase tracking-widest" style={{ color: t.muted }}>Group Size</label>
-          <div className="flex items-center justify-between rounded-lg p-2 h-12" style={{ background: t.surface, borderColor: t.border, borderWidth: 1, borderStyle: 'solid' }}>
-            <button onClick={() => setGroupSize(Math.max(1, groupSize - 1))} className="w-8 h-8 flex items-center justify-center rounded" style={{ background: t.background, borderColor: t.border, color: t.muted, borderWidth: 1, borderStyle: 'solid' }}>
-              <Minus size={16} />
-            </button>
-            <span className="font-medium" style={{ color: t.foreground }}>{groupSize}</span>
-            <button onClick={() => setGroupSize(groupSize + 1)} className="w-8 h-8 flex items-center justify-center rounded" style={{ background: t.background, borderColor: t.border, color: t.muted, borderWidth: 1, borderStyle: 'solid' }}>
-              <Plus size={16} />
-            </button>
-          </div>
-        </div>
+        <fieldset className="space-y-3">
+          <label
+            className="block text-xs font-mono uppercase tracking-widest"
+            style={{ color: t.muted }}
+          >
+            Match My Vibe
+          </label>
+          <input
+            type="text"
+            value={config.customPrompt}
+            onChange={(e) => updateConfig({ customPrompt: e.target.value })}
+            placeholder="plan my adventure for today"
+            className="w-full h-12 rounded-lg border px-4 text-sm placeholder:opacity-40"
+            style={fieldStyle}
+          />
+        </fieldset>
       </div>
 
-      <div className="mt-auto pt-8">
-        <Button onClick={() => setStep(1)} className="w-full" theme={t}>Start Journey</Button>
-      </div>
-    </motion.div>
-  );
-
-  const renderHunt = () => (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col h-full">
-      <div className="text-center space-y-2 mb-8">
-        <p className="text-xs font-mono uppercase tracking-widest" style={{ color: t.muted }}>Stop {currentStop.id} of {STOPS.length}</p>
-        <h2 className="text-2xl font-semibold" style={{ color: t.foreground }}>{currentStop.name}</h2>
-        <div className="flex items-center justify-center gap-1 text-sm" style={{ color: t.muted }}>
-          <MapPin size={14} />
-          <span>{currentStop.location}</span>
-        </div>
-      </div>
-
-      <div className="mb-6">
-        <div className="flex justify-between text-xs mb-2" style={{ color: t.muted }}>
-          <span>Progress</span>
-          <span>Step {currentStopIndex + 1}/{STOPS.length}</span>
-        </div>
-        <div className="h-2 rounded-full overflow-hidden" style={{ background: t.border }}>
-          <div className="h-full rounded-full transition-all duration-500" style={{ width: `${((currentStopIndex + 1) / STOPS.length) * 100}%`, background: t.accent }} />
-        </div>
-      </div>
-
-      <div className="flex-1 flex flex-col items-center justify-center gap-8">
-        <div className="w-full aspect-[3/4] rounded-3xl relative overflow-hidden flex flex-col items-center justify-center" style={{ background: t.surface, borderColor: t.border, borderWidth: 1, borderStyle: 'solid' }}>
-          <div className="absolute inset-8 rounded-lg pointer-events-none" style={{ borderColor: `${t.border}50`, borderWidth: 1, borderStyle: 'solid' }}>
-            <div className="absolute top-0 left-0 w-8 h-8 rounded-tl-lg" style={{ borderTopWidth: 2, borderLeftWidth: 2, borderColor: `${t.foreground}33` }} />
-            <div className="absolute top-0 right-0 w-8 h-8 rounded-tr-lg" style={{ borderTopWidth: 2, borderRightWidth: 2, borderColor: `${t.foreground}33` }} />
-            <div className="absolute bottom-0 left-0 w-8 h-8 rounded-bl-lg" style={{ borderBottomWidth: 2, borderLeftWidth: 2, borderColor: `${t.foreground}33` }} />
-            <div className="absolute bottom-0 right-0 w-8 h-8 rounded-br-lg" style={{ borderBottomWidth: 2, borderRightWidth: 2, borderColor: `${t.foreground}33` }} />
-          </div>
-
-          <Camera size={64} className="mb-4 opacity-20" style={{ color: t.muted }} />
-          <p className="text-xs font-mono uppercase tracking-widest opacity-40" style={{ color: t.muted }}>Frame Landmark</p>
-
-          <div className="absolute bottom-8 px-6 text-center">
-            <p className="text-sm italic" style={{ color: t.muted }}>{currentStop.imageHint}</p>
-          </div>
-        </div>
-
-        <input type="file" accept="image/*" capture="environment" className="hidden" id="camera-input" onChange={handleCapture} ref={fileInputRef} />
-
+      <div className="mt-auto pt-4">
         <button
-          onClick={() => fileInputRef.current?.click()}
-          className="w-20 h-20 rounded-full flex items-center justify-center border-4 active:scale-90 transition-transform ring-2"
-          style={{ background: t.accent, borderColor: t.background, boxShadow: `0 0 20px ${t.accentGlow}` }}
+          onClick={generateItinerary}
+          disabled={!config.city}
+          className="w-full h-12 rounded-lg font-medium transition-all active:scale-[0.98] flex items-center justify-center gap-2 disabled:opacity-40"
+          style={{
+            backgroundColor: t.accent,
+            color: "#fff",
+            boxShadow: `0 0 20px ${t.accentGlow}`,
+          }}
         >
-          <div className="w-14 h-14 rounded-full" style={{ border: `2px solid ${t.foreground}33` }} />
+          Forge My Path <Compass size={18} />
         </button>
       </div>
     </motion.div>
   );
 
+  const renderPlanning = () => (
+    <motion.div
+      key="planning"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="flex flex-col items-center justify-center min-h-[60vh] gap-8"
+    >
+      {!parsed && (
+        <>
+          <div className="relative">
+            <motion.div
+              animate={{ scale: [1, 1.3, 1], opacity: [0.3, 0.5, 0.3] }}
+              transition={{ duration: 2, repeat: Infinity }}
+              className="absolute inset-0 blur-3xl rounded-full"
+              style={{ backgroundColor: t.accent }}
+            />
+            <Compass
+              size={48}
+              className="relative z-10 animate-spin"
+              style={{ color: t.accent }}
+            />
+          </div>
+          <div className="text-center space-y-2">
+            <p
+              className="text-lg font-medium"
+              style={{ color: t.accent }}
+            >
+              Consulting the Oracle...
+            </p>
+            <p
+              className="text-sm font-mono uppercase"
+              style={{ color: t.muted }}
+            >
+              Forging your path
+            </p>
+            {streamError && (
+              <p className="text-sm text-red-400 mt-4 px-4 break-words">
+                {streamError.message}
+              </p>
+            )}
+          </div>
+        </>
+      )}
+
+      {parsed && (
+        <div className="w-full space-y-6">
+          <div className="text-center space-y-2">
+            <Sparkles
+              size={24}
+              className="mx-auto"
+              style={{ color: t.accent }}
+            />
+            <h2
+              className="text-2xl font-bold font-serif italic"
+              style={{ color: t.accent }}
+            >
+              {parsed.title}
+            </h2>
+            <p className="text-sm italic" style={{ color: t.muted }}>
+              {parsed.summary}
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            <AnimatePresence>
+              {parsed.stops.map((s, i) => (
+                <motion.div
+                  key={s.id || i}
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: i * 0.08 }}
+                  className="rounded-lg border p-4"
+                  style={{ backgroundColor: t.surface, borderColor: t.border }}
+                >
+                  <div className="flex items-start gap-3">
+                    <span className="text-lg mt-0.5">
+                      {stopIcon(s.type)}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-sm">{s.name}</p>
+                      <p
+                        className="text-xs mt-1 line-clamp-2"
+                        style={{ color: t.muted }}
+                      >
+                        {s.description}
+                      </p>
+                    </div>
+                    <span
+                      className="text-[10px] font-mono uppercase shrink-0 mt-1 px-2 py-0.5 rounded"
+                      style={{
+                        backgroundColor: t.accentLight,
+                        color: t.accent,
+                      }}
+                    >
+                      {s.type}
+                    </span>
+                  </div>
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          </div>
+
+          {!streaming && parsed.stops.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="space-y-3 pt-4"
+            >
+              <button
+                onClick={handleShare}
+                className="w-full h-12 rounded-lg border font-medium transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+                style={fieldStyle}
+              >
+                <Share2 size={16} />
+                {copied ? "Link Copied!" : "Share Quest Link"}
+              </button>
+              <button
+                onClick={startJourney}
+                className="w-full h-12 rounded-lg font-medium transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+                style={{
+                  backgroundColor: t.accent,
+                  color: "#fff",
+                  boxShadow: `0 0 20px ${t.accentGlow}`,
+                }}
+              >
+                Begin Adventure <ArrowRight size={18} />
+              </button>
+            </motion.div>
+          )}
+        </div>
+      )}
+    </motion.div>
+  );
+
+  const renderHunt = () => {
+    if (!stop || !itinerary) return null;
+    return (
+      <motion.div
+        key="hunt"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        className="flex flex-col h-full"
+      >
+        <div className="text-center space-y-2 mb-6">
+          <p
+            className="text-xs font-mono uppercase tracking-widest"
+            style={{ color: t.muted }}
+          >
+            Stop {progress.currentStopIndex + 1} of{" "}
+            {itinerary.stops.length}
+          </p>
+          <h2 className="text-2xl font-semibold">{stop.name}</h2>
+          <div
+            className="flex items-center justify-center gap-1 text-sm"
+            style={{ color: t.muted }}
+          >
+            <MapPin size={14} />
+            <span>{stop.address}</span>
+          </div>
+        </div>
+
+        <div className="mb-6">
+          <div
+            className="flex justify-between text-xs mb-2"
+            style={{ color: t.muted }}
+          >
+            <span>Quest Progress</span>
+            <span>
+              {progress.currentStopIndex + 1}/{itinerary.stops.length}
+            </span>
+          </div>
+          <div
+            className="h-2 rounded-full overflow-hidden"
+            style={{ backgroundColor: t.border }}
+          >
+            <motion.div
+              className="h-full rounded-full"
+              style={{ backgroundColor: t.accent }}
+              initial={{ width: 0 }}
+              animate={{
+                width: `${((progress.currentStopIndex + 1) / itinerary.stops.length) * 100}%`,
+              }}
+              transition={{ duration: 0.5 }}
+            />
+          </div>
+        </div>
+
+        <div
+          className="rounded-xl border p-5 mb-6"
+          style={{ backgroundColor: t.surface, borderColor: t.border }}
+        >
+          <p
+            className="text-sm italic leading-relaxed mb-3"
+            style={{ color: t.muted }}
+          >
+            &ldquo;{stop.description}&rdquo;
+          </p>
+          <a
+            href={mapsUrl(stop)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 text-sm font-medium no-underline"
+            style={{ color: t.accent }}
+          >
+            <Navigation size={14} />
+            Open in Maps
+          </a>
+        </div>
+
+        <div className="flex-1 flex flex-col items-center justify-center gap-6">
+          <div
+            className="w-full aspect-[3/4] rounded-3xl relative overflow-hidden flex flex-col items-center justify-center border"
+            style={{ backgroundColor: t.surface, borderColor: t.border }}
+          >
+            <div
+              className="absolute inset-8 border rounded-lg pointer-events-none"
+              style={{ borderColor: `${t.muted}20` }}
+            >
+              {["tl", "tr", "bl", "br"].map((c) => (
+                <div
+                  key={c}
+                  className={`absolute w-8 h-8 ${
+                    c === "tl"
+                      ? "top-0 left-0 rounded-tl-lg border-t-2 border-l-2"
+                      : c === "tr"
+                        ? "top-0 right-0 rounded-tr-lg border-t-2 border-r-2"
+                        : c === "bl"
+                          ? "bottom-0 left-0 rounded-bl-lg border-b-2 border-l-2"
+                          : "bottom-0 right-0 rounded-br-lg border-b-2 border-r-2"
+                  }`}
+                  style={{ borderColor: `${t.muted}30` }}
+                />
+              ))}
+            </div>
+            <Camera
+              size={48}
+              style={{ color: t.muted, opacity: 0.3 }}
+            />
+            <p
+              className="text-xs font-mono uppercase tracking-widest mt-3"
+              style={{ color: t.muted, opacity: 0.5 }}
+            >
+              Capture Artifact
+            </p>
+          </div>
+
+          <input
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={handleCapture}
+            ref={fileInputRef}
+          />
+
+          <div className="flex items-center justify-center">
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="w-20 h-20 rounded-full flex items-center justify-center border-4 active:scale-90 transition-transform"
+              style={{
+                backgroundColor: t.foreground,
+                borderColor: t.background,
+                boxShadow: `0 0 20px ${t.accentGlow}`,
+              }}
+            >
+              <div
+                className="w-14 h-14 rounded-full border-2"
+                style={{ borderColor: `${t.background}30` }}
+              />
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    );
+  };
+
   const renderAnalyzing = () => (
-    <div className="flex-1 flex flex-col items-center justify-center gap-6">
+    <div
+      key="analyzing"
+      className="flex-1 flex flex-col items-center justify-center gap-6"
+    >
       <div className="relative">
         <motion.div
           animate={{ scale: [1, 1.2, 1], opacity: [0.3, 0.6, 0.3] }}
           transition={{ duration: 2, repeat: Infinity }}
           className="absolute inset-0 blur-3xl rounded-full"
-          style={{ background: t.accent }}
+          style={{ backgroundColor: t.accent }}
         />
-        <Loader2 size={48} className="animate-spin relative z-10" style={{ color: t.accent }} />
+        <Loader2
+          size={48}
+          className="animate-spin relative z-10"
+          style={{ color: t.accent }}
+        />
       </div>
       <div className="text-center space-y-2">
-        <h3 className="text-xl font-medium" style={{ color: t.foreground }}>Analyzing Artifact...</h3>
-        <p className="text-sm font-mono uppercase tracking-widest" style={{ color: t.muted }}>Consulting the Void</p>
+        <h3 className="text-xl font-medium">Reading the Signs...</h3>
+        <p
+          className="text-sm font-mono uppercase tracking-widest"
+          style={{ color: t.muted }}
+        >
+          {stop?.name}
+        </p>
       </div>
     </div>
   );
 
-  const renderLore = () => (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col h-full">
-      <div className="flex gap-4 mb-8">
-        <div className="w-24 h-24 shrink-0 rounded overflow-hidden" style={{ background: t.surface, borderColor: t.border, borderWidth: 1, borderStyle: 'solid' }}>
-          {capturedImage && <img src={capturedImage} alt="Captured" className="w-full h-full object-cover grayscale" />}
-        </div>
-        <div className="flex flex-col justify-center">
-          <h2 className="text-xl font-semibold" style={{ color: t.foreground }}>{currentStop.name}</h2>
-          <p className="text-xs font-mono uppercase" style={{ color: t.muted }}>{currentStop.era}</p>
-        </div>
-      </div>
-
-      <div className="flex-1 space-y-6">
-        <p className="text-lg font-serif leading-relaxed italic" style={{ color: t.foreground }}>"{lore}"</p>
-
-        <div className="h-16 rounded-lg flex items-center px-4 gap-4" style={{ background: t.surface, borderColor: t.border, borderWidth: 1, borderStyle: 'solid' }}>
-          <button
-            onClick={() => { if (audioRef.current) { isPlaying ? audioRef.current.pause() : audioRef.current.play(); setIsPlaying(!isPlaying); } }}
-            className="w-10 h-10 rounded-full flex items-center justify-center text-white"
-            style={{ background: t.accent }}
+  const renderLore = () => {
+    if (!stop) return null;
+    return (
+      <motion.div
+        key="lore"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        className="flex flex-col h-full"
+      >
+        <div className="flex gap-4 mb-6">
+          <div
+            className="w-24 h-24 shrink-0 rounded overflow-hidden border"
+            style={{ borderColor: t.border }}
           >
-            {isPlaying ? <Pause size={20} /> : <Play size={20} />}
-          </button>
-
-          <div className="flex-1 flex items-center gap-1 h-6">
-            {[...Array(24)].map((_, i) => (
-              <motion.div
-                key={i}
-                animate={isPlaying ? { height: [4, Math.random() * 20 + 4, 4] } : { height: 4 }}
-                transition={{ duration: 0.5, repeat: Infinity, delay: i * 0.05 }}
-                className="w-1 rounded-full"
-                style={{ background: i < 12 ? t.accent : t.border }}
+            {sp?.capturedImage ? (
+              <img
+                src={sp.capturedImage}
+                alt="Captured"
+                className="w-full h-full object-cover grayscale"
               />
-            ))}
+            ) : (
+              <div
+                className="w-full h-full flex items-center justify-center"
+                style={{ backgroundColor: t.surface }}
+              >
+                <Camera
+                  size={24}
+                  style={{ color: t.muted, opacity: 0.3 }}
+                />
+              </div>
+            )}
           </div>
-
-          {audioUrl && <audio ref={audioRef} src={audioUrl} onEnded={() => setIsPlaying(false)} className="hidden" />}
-        </div>
-      </div>
-
-      {currentStopIndex < STOPS.length - 1 && (
-        <div className="mb-6 p-4 rounded-lg" style={{ background: t.surface, borderColor: t.border, borderWidth: 1, borderStyle: 'solid' }}>
-          <div className="flex items-center gap-2 text-sm mb-2" style={{ color: t.muted }}>
-            <MapPin size={14} />
-            <span>Next Destination</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="font-medium" style={{ color: t.foreground }}>{STOPS[currentStopIndex + 1].name}</p>
-              <p className="text-xs" style={{ color: t.muted }}>{STOPS[currentStopIndex + 1].coordinates}</p>
-            </div>
-            <a
-              href={`https://www.google.com/maps/dir/?api=1&destination=${STOPS[currentStopIndex + 1].coordinates.replace('°', '').replace(/,/g, '')}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sm font-medium hover:underline"
+          <div className="flex flex-col justify-center">
+            <h2 className="text-xl font-semibold">{stop.name}</h2>
+            <p
+              className="text-xs font-mono uppercase"
               style={{ color: t.accent }}
             >
-              Navigate
-            </a>
+              {stopIcon(stop.type)} {stop.type}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex-1 space-y-6">
+          <p className="text-lg font-serif leading-relaxed italic">
+            &ldquo;{sp?.lore || "The oracle speaks..."}&rdquo;
+          </p>
+
+          {sp?.audioUrl && (
+            <div
+              className="h-16 rounded-lg border flex items-center px-4 gap-4"
+              style={{ backgroundColor: t.surface, borderColor: t.border }}
+            >
+              <button
+                onClick={() => {
+                  if (!audioRef.current) return;
+                  if (audioRef.current.paused) audioRef.current.play();
+                  else audioRef.current.pause();
+                }}
+                className="w-10 h-10 rounded-full flex items-center justify-center text-white shrink-0"
+                style={{ backgroundColor: t.accent }}
+              >
+                <audio ref={audioRef} src={sp.audioUrl} className="hidden" />
+                {audioRef.current && !audioRef.current.paused ? (
+                  <Pause size={20} />
+                ) : (
+                  <Play size={20} />
+                )}
+              </button>
+              <div className="flex-1 flex items-center gap-1 h-6">
+                {[...Array(24)].map((_, i) => (
+                  <motion.div
+                    key={i}
+                    animate={{ height: [4, Math.random() * 20 + 4, 4] }}
+                    transition={{
+                      duration: 0.5,
+                      repeat: Infinity,
+                      delay: i * 0.05,
+                    }}
+                    className="w-1 rounded-full"
+                    style={{
+                      backgroundColor: i < 12 ? t.accent : t.border,
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {stop.nearbySpots && stop.nearbySpots.length > 0 && (
+            <div className="space-y-3 pt-2">
+              <h3
+                className="text-xs font-mono uppercase tracking-widest"
+                style={{ color: t.muted }}
+              >
+                Explore Nearby
+              </h3>
+              <div className="space-y-2">
+                {stop.nearbySpots.map((spot, i) => (
+                  <motion.div
+                    key={spot.name}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: i * 0.1 }}
+                  >
+                    <button
+                      onClick={() => fetchSpotLore(spot.name, spot.type)}
+                      className="w-full text-left rounded-lg border p-4 transition-all active:scale-[0.99]"
+                      style={{
+                        backgroundColor:
+                          expandedSpot === spot.name
+                            ? t.accentLight
+                            : t.surface,
+                        borderColor:
+                          expandedSpot === spot.name
+                            ? t.accent
+                            : t.border,
+                      }}
+                    >
+                      <div className="flex items-start gap-3">
+                        <span className="text-lg mt-0.5">
+                          {stopIcon(spot.type)}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <p className="font-medium text-sm">
+                              {spot.name}
+                            </p>
+                            {spotLoreMutation.isPending &&
+                              expandedSpot === spot.name && (
+                                <Loader2
+                                  size={14}
+                                  className="animate-spin shrink-0"
+                                  style={{ color: t.accent }}
+                                />
+                              )}
+                          </div>
+                          <p
+                            className="text-xs mt-1"
+                            style={{ color: t.muted }}
+                          >
+                            {spot.shortDescription}
+                          </p>
+                          {expandedSpot === spot.name &&
+                            spotLoreCache[spot.name] && (
+                              <p
+                                className="text-xs mt-3 leading-relaxed italic"
+                                style={{
+                                  color: t.foreground,
+                                  opacity: 0.85,
+                                }}
+                              >
+                                &ldquo;{spotLoreCache[spot.name]}&rdquo;
+                              </p>
+                            )}
+                        </div>
+                        <span
+                          className="text-[10px] font-mono uppercase shrink-0 mt-1 px-2 py-0.5 rounded"
+                          style={{
+                            backgroundColor: t.accentLight,
+                            color: t.accent,
+                          }}
+                        >
+                          {spot.type}
+                        </span>
+                      </div>
+                    </button>
+                  </motion.div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {!isLast && itinerary && (
+          <div
+            className="mb-4 p-4 rounded-lg border"
+            style={{ backgroundColor: t.surface, borderColor: t.border }}
+          >
+            <div
+              className="flex items-center gap-2 text-sm mb-2"
+              style={{ color: t.muted }}
+            >
+              <MapPin size={14} />
+              <span>Next Destination</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-medium">
+                  {itinerary.stops[progress.currentStopIndex + 1]?.name}
+                </p>
+                <p className="text-xs" style={{ color: t.muted }}>
+                  {
+                    itinerary.stops[progress.currentStopIndex + 1]
+                      ?.address
+                  }
+                </p>
+              </div>
+              <a
+                href={mapsUrl(
+                  itinerary.stops[progress.currentStopIndex + 1]
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm font-medium hover:underline no-underline"
+                style={{ color: t.accent }}
+              >
+                Navigate
+              </a>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-auto pt-2 space-y-2">
+          <button
+            onClick={nextStop}
+            className="w-full h-12 rounded-lg font-medium transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+            style={{
+              backgroundColor: t.accent,
+              color: "#fff",
+              boxShadow: `0 0 15px ${t.accentGlow}`,
+            }}
+          >
+            {isLast ? (
+              <>
+                Complete Journey <Sparkles size={18} />
+              </>
+            ) : (
+              <>
+                Next Destination <ArrowRight size={18} />
+              </>
+            )}
+          </button>
+          <button
+            onClick={endJourney}
+            className="w-full h-10 rounded-lg text-sm transition-all flex items-center justify-center gap-2"
+            style={{ color: t.muted }}
+          >
+            End Journey Early
+          </button>
+        </div>
+      </motion.div>
+    );
+  };
+
+  const renderLog = () => (
+    <motion.div
+      key="log"
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      className="flex flex-col gap-6"
+    >
+      <div className="text-center space-y-2">
+        <div
+          className="inline-flex items-center justify-center w-16 h-16 rounded-full mb-4"
+          style={{ backgroundColor: t.accentLight, color: t.accent }}
+        >
+          <Sparkles size={32} />
+        </div>
+        <h2 className="text-3xl font-bold font-serif italic">
+          Adventure Complete
+        </h2>
+        <p style={{ color: t.muted }}>
+          {itinerary?.title || "Your quest has been chronicled."}
+        </p>
+      </div>
+
+      <div
+        className="rounded-xl border p-6"
+        style={{ backgroundColor: t.surface, borderColor: t.border }}
+      >
+        <div className="grid grid-cols-3 gap-4 text-center">
+          <div>
+            <p className="text-2xl font-serif">
+              {itinerary?.stops.length || 0}
+            </p>
+            <p
+              className="text-[10px] font-mono uppercase"
+              style={{ color: t.muted }}
+            >
+              Stops
+            </p>
+          </div>
+          <div
+            className="border-x"
+            style={{ borderColor: t.border }}
+          >
+            <p className="text-2xl font-serif">{elapsed}</p>
+            <p
+              className="text-[10px] font-mono uppercase"
+              style={{ color: t.muted }}
+            >
+              Time
+            </p>
+          </div>
+          <div>
+            <p className="text-2xl font-serif">
+              {progress.stopProgress.filter((s) => s.arrived).length}
+            </p>
+            <p
+              className="text-[10px] font-mono uppercase"
+              style={{ color: t.muted }}
+            >
+              Conquered
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {progress.stopProgress.some((s) => s.capturedImage) && (
+        <div className="space-y-3">
+          <h3
+            className="text-sm font-mono uppercase tracking-widest"
+            style={{ color: t.muted }}
+          >
+            Captured Artifacts
+          </h3>
+          <div className="grid grid-cols-2 gap-2">
+            {progress.stopProgress.map(
+              (sp, i) =>
+                sp.capturedImage && (
+                  <div
+                    key={i}
+                    className="aspect-square rounded-lg overflow-hidden border"
+                    style={{ borderColor: t.border }}
+                  >
+                    <img
+                      src={sp.capturedImage}
+                      alt={itinerary?.stops[i]?.name}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                )
+            )}
           </div>
         </div>
       )}
 
-      <div className="mt-auto pt-4">
-        <Button onClick={nextStop} variant="outline" className="w-full" theme={t}>
-          Next Destination <ArrowRight size={18} />
-        </Button>
-      </div>
-    </motion.div>
-  );
-
-  const renderSummary = () => (
-    <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col gap-8">
-      <div className="text-center space-y-2">
-        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full mb-4" style={{ background: t.accentLight, color: t.accent }}>
-          <Sparkles size={32} />
-        </div>
-        <h2 className="text-3xl font-bold font-serif italic" style={{ color: t.foreground }}>Journey Complete</h2>
-        <p style={{ color: t.muted }}>The alchemist has woven your path into history.</p>
-      </div>
-
-      <Card theme={t} className="p-6">
-        <div className="grid grid-cols-3 gap-4 text-center">
-          <div>
-            <p className="text-2xl font-serif" style={{ color: t.foreground }}>{STOPS.length}</p>
-            <p className="text-[10px] font-mono uppercase" style={{ color: t.muted }}>Stops</p>
-          </div>
-          <div style={{ borderLeftWidth: 1, borderRightWidth: 1, borderColor: t.border, borderStyle: 'solid' }}>
-            <p className="text-2xl font-serif" style={{ color: t.foreground }}>45m</p>
-            <p className="text-[10px] font-mono uppercase" style={{ color: t.muted }}>Time</p>
-          </div>
-          <div>
-            <p className="text-2xl font-serif" style={{ color: t.foreground }}>2.4</p>
-            <p className="text-[10px] font-mono uppercase" style={{ color: t.muted }}>KM</p>
+      {finalLore && (
+        <div className="space-y-3">
+          <h3
+            className="text-sm font-mono uppercase tracking-widest"
+            style={{ color: t.muted }}
+          >
+            The Chronicle
+          </h3>
+          <div
+            className="rounded-xl border p-5"
+            style={{ backgroundColor: t.surface, borderColor: t.border }}
+          >
+            <p className="text-base font-serif leading-relaxed italic whitespace-pre-line">
+              {finalLore}
+            </p>
           </div>
         </div>
-      </Card>
+      )}
 
-      <div className="space-y-4">
-        <h3 className="text-sm font-mono uppercase tracking-widest" style={{ color: t.muted }}>Captured Memories</h3>
-        <div className="grid grid-cols-2 gap-2">
-          {STOPS.map((_, i) => (
-            <div key={i} className="aspect-square rounded-lg flex items-center justify-center" style={{ background: t.surface, borderColor: t.border, borderWidth: 1, borderStyle: 'solid' }}>
-              <Camera size={24} className="opacity-20" style={{ color: t.muted }} />
-            </div>
-          ))}
+      {finalLoreMutation.isPending && !finalLore && (
+        <div className="flex items-center justify-center gap-3 py-8">
+          <Loader2
+            size={24}
+            className="animate-spin"
+            style={{ color: t.accent }}
+          />
+          <span style={{ color: t.muted }}>Inscribing your legend...</span>
         </div>
-      </div>
+      )}
 
-      <Button onClick={() => window.location.reload()} className="w-full mt-4" theme={t}>
-        Finish Journey <CheckCircle size={18} />
-      </Button>
+      <button
+        onClick={handleShare}
+        className="w-full h-12 rounded-lg border font-medium transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+        style={fieldStyle}
+      >
+        <Share2 size={16} />
+        {copied ? "Link Copied!" : "Share Adventure"}
+      </button>
+
+      <button
+        onClick={resetJourney}
+        className="w-full h-12 rounded-lg font-medium transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+        style={{
+          backgroundColor: t.accent,
+          color: "#fff",
+          boxShadow: `0 0 20px ${t.accentGlow}`,
+        }}
+      >
+        New Quest <Compass size={18} />
+      </button>
     </motion.div>
   );
 
   return (
-    <div className="min-h-screen font-sans" style={{ background: t.background, color: t.foreground, '--accent': t.accent } as React.CSSProperties}>
-      {/* Header */}
-      <header className="h-14 flex items-center justify-between px-4 sticky top-0 z-50" style={{ borderBottomWidth: 1, borderColor: t.border, background: `${t.background}cc`, backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}>
-        {step > 0 && step < 4 ? (
-          <button onClick={() => setStep(prev => (prev - 1) as 0 | 1 | 2 | 3 | 4)} className="w-8 h-8 flex items-center justify-center rounded-full" style={{ background: t.surface, borderColor: t.border, borderWidth: 1, borderStyle: 'solid' }}>
-            <ArrowLeft size={16} style={{ color: t.foreground }} />
+    <div
+      className="min-h-screen font-sans"
+      style={{ backgroundColor: t.background, color: t.foreground }}
+    >
+      <header
+        className="h-14 border-b flex items-center justify-between px-4 sticky top-0 z-50"
+        style={{
+          borderColor: t.border,
+          backgroundColor: `${t.background}cc`,
+          backdropFilter: "blur(12px)",
+        }}
+      >
+        {step !== "welcome" ? (
+          <button
+            onClick={goBack}
+            className="w-8 h-8 flex items-center justify-center rounded-full border"
+            style={{ backgroundColor: t.surface, borderColor: t.border }}
+          >
+            <ArrowLeft size={16} />
           </button>
-        ) : <div className="w-8" />}
-
-        <h1 className="text-lg font-semibold tracking-tight" style={{ color: t.foreground }}>LensLore</h1>
-
-        <button className="w-8 h-8 flex items-center justify-center rounded-full" style={{ background: t.surface, borderColor: t.border, borderWidth: 1, borderStyle: 'solid' }}>
-          <User size={16} style={{ color: t.muted }} />
-        </button>
+        ) : (
+          <div className="w-8" />
+        )}
+        <h1
+          className="text-lg font-semibold tracking-tight"
+          style={{ fontFamily: "var(--font-newsreader)" }}
+        >
+          LensLore
+        </h1>
+        <div className="w-8" />
       </header>
 
-      {/* Main Content */}
       <main className="max-w-[450px] mx-auto px-6 py-8 h-[calc(100vh-3.5rem)] overflow-y-auto">
         <AnimatePresence mode="wait">
-          {step === 0 && renderSetup()}
-          {step === 1 && renderHunt()}
-          {step === 2 && renderAnalyzing()}
-          {step === 3 && renderLore()}
-          {step === 4 && renderSummary()}
+          {step === "welcome" && renderWelcome()}
+          {step === "planning" && renderPlanning()}
+          {step === "hunt" && renderHunt()}
+          {step === "analyzing" && renderAnalyzing()}
+          {step === "lore" && renderLore()}
+          {step === "log" && renderLog()}
         </AnimatePresence>
       </main>
 
-      {/* Background Glow */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden z-[-1]">
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] blur-[120px] rounded-full" style={{ background: t.glowColor }} />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] blur-[120px] rounded-full" style={{ background: t.glowColor }} />
+        <div
+          className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] blur-[120px] rounded-full"
+          style={{ backgroundColor: t.glowColor }}
+        />
+        <div
+          className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] blur-[120px] rounded-full"
+          style={{ backgroundColor: t.glowColor }}
+        />
       </div>
     </div>
   );
