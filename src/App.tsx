@@ -33,6 +33,7 @@ import {
   MEALS,
 } from "./lib/types";
 import { saveToSession, loadFromSession, clearSession } from "./lib/session";
+import { calculateDistance } from "./lib/geo";
 import {
   Collapsible,
   CollapsibleTrigger,
@@ -101,6 +102,15 @@ export default function App() {
   const [copied, setCopied] = useState(false);
   const [explorationSpot, setExplorationSpot] = useState<NearbySpot | null>(null);
   const [explorationLore, setExplorationLore] = useState("");
+  const [discoveredSecrets, setDiscoveredSecrets] = useState<string[]>(
+    () => loadFromSession<string[]>("discoveredSecrets") || []
+  );
+  const [activeSecret, setActiveSecret] = useState<{
+    name: string;
+    loreSnippet: string;
+    lookDirection: string;
+    audioUrl?: string;
+  } | null>(() => loadFromSession("activeSecret") || null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -297,6 +307,62 @@ export default function App() {
       });
     },
   });
+
+  const secretTtsMutation = useMutation({
+    mutationFn: async (text: string) => {
+      const r = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!r.ok) throw new Error();
+      return r.blob();
+    },
+    onSuccess: (blob) => {
+      const url = URL.createObjectURL(blob);
+      setActiveSecret((prev) => {
+        if (!prev) return null;
+        const next = { ...prev, audioUrl: url };
+        saveToSession("activeSecret", next);
+        return next;
+      });
+    },
+  });
+
+  React.useEffect(() => {
+    if (step !== "hunt" || !itinerary?.routeSecrets || activeSecret) return;
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        const userLat = pos.coords.latitude;
+        const userLon = pos.coords.longitude;
+
+        itinerary.routeSecrets!.forEach((secret) => {
+          if (discoveredSecrets.includes(secret.name)) return;
+          
+          const [sLat, sLon] = secret.coordinates.split(",").map(Number);
+          if (isNaN(sLat) || isNaN(sLon)) return;
+
+          const distance = calculateDistance(userLat, userLon, sLat, sLon);
+          if (distance < 50) { // 50 meters geofence
+            setDiscoveredSecrets(prev => {
+              const next = [...prev, secret.name];
+              saveToSession("discoveredSecrets", next);
+              return next;
+            });
+            const sData = { name: secret.name, loreSnippet: secret.loreSnippet, lookDirection: secret.lookDirection };
+            setActiveSecret(sData);
+            saveToSession("activeSecret", sData);
+            secretTtsMutation.mutate(secret.loreSnippet); // Fetch audio
+          }
+        });
+      },
+      (err) => console.warn("GPS watch err:", err),
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [step, itinerary, discoveredSecrets, activeSecret, secretTtsMutation]);
 
   const finalLoreMutation = useMutation({
     mutationFn: async () => {
@@ -1619,6 +1685,83 @@ export default function App() {
     </motion.div>
   );
 
+  const renderSecretModal = () => {
+    if (!activeSecret) return null;
+    return (
+      <motion.div
+        key="secret-modal"
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 20 }}
+        className="fixed inset-4 z-[100] flex flex-col items-center justify-center pointer-events-auto"
+      >
+        <div 
+          className="absolute inset-[-100vh] bg-black/60 backdrop-blur-sm -z-10" 
+          onClick={() => {
+            setActiveSecret(null);
+            saveToSession("activeSecret", null);
+          }} 
+        />
+        <div 
+          className="w-full max-w-sm rounded-2xl border p-6 flex flex-col gap-6 shadow-2xl relative overflow-hidden"
+          style={{ backgroundColor: t.surface, borderColor: t.border }}
+        >
+          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r" style={{ backgroundImage: `linear-gradient(to right, transparent, ${t.accent}, transparent)` }} />
+          
+          <div className="text-center space-y-2 relative z-10">
+            <div className="inline-flex items-center justify-center w-12 h-12 rounded-full mb-2 bg-black/20" style={{ color: t.accent }}>
+              <Compass size={24} className="animate-pulse" />
+            </div>
+            <p className="text-xs font-mono uppercase tracking-widest" style={{ color: t.accent }}>
+              Secret Discovered
+            </p>
+            <h3 className="text-xl font-semibold font-serif italic border-b pb-4" style={{ borderColor: t.border }}>
+              Look {activeSecret.lookDirection.toUpperCase()}
+            </h3>
+          </div>
+
+          <div className="relative z-10">
+            <p className="text-sm leading-relaxed italic" style={{ color: t.foreground }}>
+              &ldquo;{activeSecret.loreSnippet}&rdquo;
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-3 relative z-10">
+            {activeSecret.audioUrl ? (
+              <div className="h-12 rounded-lg flex items-center justify-center gap-3 border" style={{ borderColor: t.accentLight, backgroundColor: t.accentLight + '20' }}>
+                <audio autoPlay src={activeSecret.audioUrl} onEnded={() => {
+                  setTimeout(() => {
+                    setActiveSecret(null);
+                    saveToSession("activeSecret", null);
+                  }, 3000);
+                }} />
+                <div className="flex gap-1 h-4">
+                  {[...Array(12)].map((_, i) => (
+                    <motion.div key={i} animate={{ height: [2, Math.random() * 12 + 4, 2] }} transition={{ duration: 0.4, repeat: Infinity, delay: i * 0.05 }} className="w-1 rounded-full" style={{ backgroundColor: t.accent }} />
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-center gap-2 h-12 text-xs" style={{ color: t.muted }}>
+                <Loader2 size={14} className="animate-spin" /> Whispering...
+              </div>
+            )}
+            <button
+              onClick={() => {
+                setActiveSecret(null);
+                saveToSession("activeSecret", null);
+              }}
+              className="w-full h-12 rounded-lg font-medium transition-all active:scale-[0.98] border"
+              style={{ backgroundColor: t.background, borderColor: t.border }}
+            >
+              Continue Journey
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    );
+  };
+
   return (
     <div
       className="min-h-screen font-sans"
@@ -1663,6 +1806,10 @@ export default function App() {
           {step === "log" && renderLog()}
         </AnimatePresence>
       </main>
+
+      <AnimatePresence>
+        {renderSecretModal()}
+      </AnimatePresence>
 
       <div className="fixed inset-0 pointer-events-none overflow-hidden z-[-1]">
         <div

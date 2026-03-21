@@ -46,10 +46,19 @@ Return ONLY valid JSON, no markdown fences, no explanation:
         { "name": "Nearby real place", "type": "landmark|restaurant|activity", "shortDescription": "1 sentence teaser in ${vibe} style" }
       ]
     }
+  ],
+  "routeSecrets": [
+    {
+      "name": "hidden spot name",
+      "coordinates": "lat,lng",
+      "lookDirection": "left|right|up|down|around",
+      "loreSnippet": "1-2 sentences of thematic audio narration triggered when they walk past this exact coordinate. Start by telling them where to look based on lookDirection."
+    }
   ]
 }
 
-IMPORTANT: Each stop MUST have 2-3 nearbySpots — real places within walking distance that the explorer could discover. These should be museums, parks, hidden gems, street art, viewpoints, or local haunts near the main stop. Give them evocative ${vibe}-themed names and one-line teasers.`;
+IMPORTANT: Each stop MUST have 2-3 nearbySpots — real places within walking distance.
+CRITICAL FOR AUTO-NARRATION: You MUST generate 2-3 \`routeSecrets\`. These are physical, real-world points of interest (statues, strange buildings, alleys, small parks) that exist ON THE WALKING PATH entirely *between* the main stops. You must provide their exact \`coordinates\` (\`lat,lng\`). The \`loreSnippet\` is an audio script that will auto-play the moment their GPS breaches a 40-meter radius of the coordinate. It should be mysterious and direct their gaze using \`lookDirection\`.`;
 
   try {
     console.log('[itinerary] calling streamText with gemini-3-flash-preview');
