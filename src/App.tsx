@@ -3,8 +3,6 @@ import {
   Camera,
   ArrowLeft,
   ArrowRight,
-  Play,
-  Pause,
   Loader2,
   Plus,
   Minus,
@@ -34,7 +32,14 @@ import {
   CITIES,
   MEALS,
 } from "./lib/types";
-import { saveToSession, loadFromSession } from "./lib/session";
+import { saveToSession, loadFromSession, clearSession } from "./lib/session";
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible";
+import { Progress } from "@/components/ui/progress";
+import { AudioPlayer } from "@/components/audio-player";
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -97,7 +102,6 @@ export default function App() {
   const [explorationSpot, setExplorationSpot] = useState<NearbySpot | null>(null);
   const [explorationLore, setExplorationLore] = useState("");
 
-  const audioRef = useRef<HTMLAudioElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const t = themes[config.vibe];
@@ -197,8 +201,15 @@ export default function App() {
   );
 
   const generateItinerary = useCallback(() => {
-    console.log("[generateItinerary] called, config:", config);
-    console.log("[generateItinerary] calling completeItinerary");
+    clearSession();
+    setItinerary(null);
+    setProgress({
+      currentStopIndex: 0,
+      stopProgress: [],
+      startTime: null,
+      completedAt: null,
+    });
+    saveToSession("config", config);
     completeItinerary("", { body: { ...config } });
     setStep("planning");
     saveToSession("step", "planning");
@@ -402,7 +413,6 @@ export default function App() {
 
   const nextStop = useCallback(() => {
     if (!itinerary) return;
-    if (audioRef.current) audioRef.current.pause();
     if (progress.currentStopIndex < itinerary.stops.length - 1) {
       setProgress((prev) => {
         const u = { ...prev, currentStopIndex: prev.currentStopIndex + 1 };
@@ -420,7 +430,6 @@ export default function App() {
   }, [itinerary, progress.currentStopIndex]);
 
   const endJourney = useCallback(() => {
-    if (audioRef.current) audioRef.current.pause();
     finalLoreMutation.mutate();
     setStep("log");
     saveToSession("step", "log");
@@ -428,7 +437,6 @@ export default function App() {
   }, []);
 
   const goBack = useCallback(() => {
-    if (audioRef.current) audioRef.current.pause();
     const map: Record<AppStep, AppStep> = {
       planning: "welcome",
       preview: "welcome",
@@ -730,140 +738,167 @@ export default function App() {
     </motion.div>
   );
 
-  const renderPlanning = () => (
-    <motion.div
-      key="planning"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="flex flex-col items-center justify-center min-h-[60vh] gap-8"
-    >
-      {!parsed && (
-        <>
-          <div className="relative">
-            <motion.div
-              animate={{ scale: [1, 1.3, 1], opacity: [0.3, 0.5, 0.3] }}
-              transition={{ duration: 2, repeat: Infinity }}
-              className="absolute inset-0 blur-3xl rounded-full"
-              style={{ backgroundColor: t.accent }}
-            />
-            <Compass
-              size={48}
-              className="relative z-10 animate-spin"
-              style={{ color: t.accent }}
-            />
-          </div>
-          <div className="text-center space-y-2">
-            <p
-              className="text-lg font-medium"
-              style={{ color: t.accent }}
-            >
-              Consulting the Oracle...
-            </p>
-            <p
-              className="text-sm font-mono uppercase"
-              style={{ color: t.muted }}
-            >
-              Forging your path
-            </p>
-            {streamError && (
-              <p className="text-sm text-red-400 mt-4 px-4 break-words">
-                {streamError.message}
+  const renderPlanning = () => {
+    const hasContent = parsed && (parsed.title || parsed.summary || parsed.stops?.length);
+    const showSpinner = streaming && !hasContent;
+    const showContent = hasContent;
+
+    return (
+      <motion.div
+        key="planning"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="flex flex-col gap-8"
+      >
+        {showSpinner && (
+          <div className="flex flex-col items-center justify-center min-h-[50vh] gap-6">
+            <div className="relative">
+              <motion.div
+                animate={{ scale: [1, 1.3, 1], opacity: [0.3, 0.5, 0.3] }}
+                transition={{ duration: 2, repeat: Infinity }}
+                className="absolute inset-0 blur-3xl rounded-full"
+                style={{ backgroundColor: t.accent }}
+              />
+              <Compass
+                size={48}
+                className="relative z-10 animate-spin"
+                style={{ color: t.accent }}
+              />
+            </div>
+            <div className="text-center space-y-2">
+              <p
+                className="text-lg font-medium"
+                style={{ color: t.accent }}
+              >
+                Consulting the Oracle...
               </p>
-            )}
+              <p
+                className="text-sm font-mono uppercase"
+                style={{ color: t.muted }}
+              >
+                Forging your path
+              </p>
+            </div>
           </div>
-        </>
-      )}
+        )}
 
-      {parsed && (
-        <div className="w-full space-y-6">
-          <div className="text-center space-y-2">
-            <Sparkles
-              size={24}
-              className="mx-auto"
-              style={{ color: t.accent }}
-            />
-            <h2
-              className="text-2xl font-bold font-serif italic"
-              style={{ color: t.accent }}
-            >
-              {parsed.title}
-            </h2>
-            <p className="text-sm italic" style={{ color: t.muted }}>
-              {parsed.summary}
-            </p>
+        {streamError && (
+          <div className="rounded-lg border p-4" style={{ backgroundColor: "#2a0a0a", borderColor: "#ff4444" }}>
+            <p className="text-sm text-red-400 break-words">{streamError.message}</p>
           </div>
+        )}
 
-          <div className="space-y-3">
-            <AnimatePresence>
-              {parsed.stops.map((s, i) => (
-                <motion.div
-                  key={s.id || i}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: i * 0.08 }}
-                  className="rounded-lg border p-4"
-                  style={{ backgroundColor: t.surface, borderColor: t.border }}
+        {showContent && (
+          <>
+            <div className="text-center space-y-2 pt-4">
+              {streaming && (
+                <div className="flex items-center justify-center gap-2 mb-4">
+                  <Loader2 size={14} className="animate-spin" style={{ color: t.accent }} />
+                  <span className="text-xs font-mono uppercase" style={{ color: t.muted }}>
+                    Channeling...
+                  </span>
+                </div>
+              )}
+              {!streaming && (
+                <Sparkles size={24} className="mx-auto" style={{ color: t.accent }} />
+              )}
+              <h2
+                className="text-2xl font-bold font-serif italic"
+                style={{ color: t.accent }}
+              >
+                {parsed.title}
+              </h2>
+              {parsed.summary && (
+                <motion.p
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="text-sm italic"
+                  style={{ color: t.muted }}
                 >
-                  <div className="flex items-start gap-3">
-                    <span className="text-lg mt-0.5">
-                      {stopIcon(s.type)}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-sm">{s.name}</p>
-                      <p
-                        className="text-xs mt-1 line-clamp-2"
-                        style={{ color: t.muted }}
-                      >
-                        {s.description}
-                      </p>
-                    </div>
-                    <span
-                      className="text-[10px] font-mono uppercase shrink-0 mt-1 px-2 py-0.5 rounded"
-                      style={{
-                        backgroundColor: t.accentLight,
-                        color: t.accent,
-                      }}
-                    >
-                      {s.type}
-                    </span>
-                  </div>
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          </div>
+                  {parsed.summary}
+                </motion.p>
+              )}
+            </div>
 
-          {!streaming && parsed.stops.length > 0 && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="space-y-3 pt-4"
-            >
-              <button
-                onClick={handleShare}
-                className="w-full h-12 rounded-lg border font-medium transition-all active:scale-[0.98] flex items-center justify-center gap-2"
-                style={fieldStyle}
+            {parsed.stops && parsed.stops.length > 0 && (
+              <div className="space-y-3">
+                <div
+                  className="flex items-center gap-2 text-xs font-mono uppercase tracking-widest"
+                  style={{ color: t.muted }}
+                >
+                  <span>Stops</span>
+                  <div className="flex-1 h-px" style={{ backgroundColor: t.border }} />
+                  <span>{parsed.stops.length}</span>
+                </div>
+                <AnimatePresence>
+                  {parsed.stops.map((s, i) => (
+                    <motion.div
+                      key={s.id || i}
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: i * 0.1 }}
+                      className="rounded-lg border p-4"
+                      style={{ backgroundColor: t.surface, borderColor: t.border }}
+                    >
+                      <div className="flex items-start gap-3">
+                        <span className="text-lg mt-0.5">{stopIcon(s.type)}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-sm">{s.name}</p>
+                          {s.description && (
+                            <p
+                              className="text-xs mt-1 line-clamp-2"
+                              style={{ color: t.muted }}
+                            >
+                              {s.description}
+                            </p>
+                          )}
+                        </div>
+                        <span
+                          className="text-[10px] font-mono uppercase shrink-0 mt-1 px-2 py-0.5 rounded"
+                          style={{ backgroundColor: t.accentLight, color: t.accent }}
+                        >
+                          {s.type}
+                        </span>
+                      </div>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </div>
+            )}
+
+            {!streaming && parsed.stops.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="space-y-3 pt-2"
               >
-                <Share2 size={16} />
-                {copied ? "Link Copied!" : "Share Quest Link"}
-              </button>
-              <button
-                onClick={startJourney}
-                className="w-full h-12 rounded-lg font-medium transition-all active:scale-[0.98] flex items-center justify-center gap-2"
-                style={{
-                  backgroundColor: t.accent,
-                  color: "#fff",
-                  boxShadow: `0 0 20px ${t.accentGlow}`,
-                }}
-              >
-                Begin Adventure <ArrowRight size={18} />
-              </button>
-            </motion.div>
-          )}
-        </div>
-      )}
-    </motion.div>
-  );
+                <button
+                  onClick={handleShare}
+                  className="w-full h-12 rounded-lg border font-medium transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+                  style={fieldStyle}
+                >
+                  <Share2 size={16} />
+                  {copied ? "Link Copied!" : "Share Quest Link"}
+                </button>
+                <button
+                  onClick={startJourney}
+                  className="w-full h-12 rounded-lg font-medium transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+                  style={{
+                    backgroundColor: t.accent,
+                    color: "#fff",
+                    boxShadow: `0 0 20px ${t.accentGlow}`,
+                  }}
+                >
+                  Begin Adventure <ArrowRight size={18} />
+                </button>
+              </motion.div>
+            )}
+          </>
+        )}
+      </motion.div>
+    );
+  };
 
   const renderHunt = () => {
     if (!stop || !itinerary) return null;
@@ -1086,94 +1121,53 @@ export default function App() {
           </p>
 
           {sp?.audioUrl && (
-            <div
-              className="h-16 rounded-lg border flex items-center px-4 gap-4"
-              style={{ backgroundColor: t.surface, borderColor: t.border }}
-            >
-              <button
-                onClick={() => {
-                  if (!audioRef.current) return;
-                  if (audioRef.current.paused) audioRef.current.play();
-                  else audioRef.current.pause();
-                }}
-                className="w-10 h-10 rounded-full flex items-center justify-center text-white shrink-0"
-                style={{ backgroundColor: t.accent }}
-              >
-                <audio ref={audioRef} src={sp.audioUrl} className="hidden" />
-                {audioRef.current && !audioRef.current.paused ? (
-                  <Pause size={20} />
-                ) : (
-                  <Play size={20} />
-                )}
-              </button>
-              <div className="flex-1 flex items-center gap-1 h-6">
-                {[...Array(24)].map((_, i) => (
-                  <motion.div
-                    key={i}
-                    animate={{ height: [4, Math.random() * 20 + 4, 4] }}
-                    transition={{
-                      duration: 0.5,
-                      repeat: Infinity,
-                      delay: i * 0.05,
-                    }}
-                    className="w-1 rounded-full"
-                    style={{
-                      backgroundColor: i < 12 ? t.accent : t.border,
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
+            <AudioPlayer
+              src={sp.audioUrl}
+              accent={t.accent}
+              border={t.border}
+            />
           )}
 
           {stop.nearbySpots && stop.nearbySpots.length > 0 && (
-            <div className="space-y-3 pt-2">
-              <h3
-                className="text-xs font-mono uppercase tracking-widest"
+            <Collapsible className="pt-2">
+              <CollapsibleTrigger
+                className="flex items-center gap-2 text-xs font-mono uppercase tracking-widest w-full py-2"
                 style={{ color: t.muted }}
               >
-                Explore Nearby
-              </h3>
-              <div className="space-y-2">
+                <ChevronRight size={12} className="transition-transform [[data-open]>&]:rotate-90" />
+                Explore Nearby ({stop.nearbySpots.length})
+              </CollapsibleTrigger>
+              <CollapsibleContent className="space-y-2 data-[open]:animate-in data-[closed]:animate-out data-[closed]:fade-out-0 data-[open]:fade-in-0">
                 {stop.nearbySpots.map((spot, i) => (
                   <motion.div
                     key={spot.name}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: i * 0.1 }}
+                    transition={{ delay: i * 0.05 }}
                   >
                     <button
                       onClick={() => exploreSpot(spot)}
-                      className="w-full text-left rounded-lg border p-4 transition-all active:scale-[0.99]"
+                      className="w-full text-left rounded-lg border p-3 transition-all active:scale-[0.99]"
                       style={{
                         backgroundColor: t.surface,
                         borderColor: t.border,
                       }}
                     >
-                      <div className="flex items-start gap-3">
-                        <span className="text-lg mt-0.5">
-                          {stopIcon(spot.type)}
-                        </span>
+                      <div className="flex items-center gap-3">
+                        <span className="text-base">{stopIcon(spot.type)}</span>
                         <div className="flex-1 min-w-0">
-                          <p className="font-medium text-sm">{spot.name}</p>
-                          <p
-                            className="text-xs mt-1"
-                            style={{ color: t.muted }}
-                          >
+                          <p className="font-medium text-sm truncate">{spot.name}</p>
+                          <p className="text-xs mt-0.5 line-clamp-1" style={{ color: t.muted }}>
                             {spot.shortDescription}
                           </p>
                         </div>
-                        <ChevronRight
-                          size={16}
-                          className="shrink-0 mt-1"
-                          style={{ color: t.muted }}
-                        />
+                        <ChevronRight size={14} className="shrink-0" style={{ color: t.muted }} />
                       </div>
                     </button>
                   </motion.div>
                 ))}
-              </div>
-            </div>
+              </CollapsibleContent>
+            </Collapsible>
           )}
         </div>
 
