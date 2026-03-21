@@ -13,6 +13,8 @@ import {
   Compass,
   Navigation,
   ChevronRight,
+  Volume2,
+  Eye,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { clsx, type ClassValue } from "clsx";
@@ -29,6 +31,8 @@ import {
   type JourneyProgress,
   type NearbySpot,
   type AppStep,
+  type RouteHighlight,
+  type NarrationSnippet,
   CITIES,
   MEALS,
 } from "./lib/types";
@@ -65,6 +69,17 @@ function parseJsonFromStream(text: string): Itinerary | null {
 
 function stopIcon(type: string) {
   return type === "restaurant" ? "🍽️" : type === "activity" ? "⚔️" : "📍";
+}
+
+function highlightIcon(type: string) {
+  switch (type) {
+    case "monument": return "🏛️";
+    case "statue": return "🗿";
+    case "mural": return "🎨";
+    case "park": return "🌳";
+    case "building": return "🏢";
+    default: return "📍";
+  }
 }
 
 function mapsUrl(s: { coordinates: string; address: string; name: string }) {
@@ -111,6 +126,20 @@ export default function App() {
     lookDirection: string;
     audioUrl?: string;
   } | null>(() => loadFromSession("activeSecret") || null);
+
+  // Guided tour state
+  const [activeHighlight, setActiveHighlight] = useState<{
+    name: string;
+    type: string;
+    narration: NarrationSnippet;
+    audioUrl?: string;
+  } | null>(() => loadFromSession("activeHighlight") || null);
+  const [discoveredHighlights, setDiscoveredHighlights] = useState<string[]>(
+    () => loadFromSession<string[]>("discoveredHighlights") || []
+  );
+  const [lastHighlightTimestamp, setLastHighlightTimestamp] = useState<number>(0);
+  const [arrivalNotification, setArrivalNotification] = useState<string | null>(null);
+  const [isStopArrived, setIsStopArrived] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -329,40 +358,121 @@ export default function App() {
     },
   });
 
+  // Highlight TTS mutation
+  const highlightTtsMutation = useMutation({
+    mutationFn: async (text: string) => {
+      const r = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!r.ok) throw new Error();
+      return r.blob();
+    },
+    onSuccess: (blob) => {
+      const url = URL.createObjectURL(blob);
+      setActiveHighlight((prev) => {
+        if (!prev) return null;
+        const next = { ...prev, audioUrl: url };
+        saveToSession("activeHighlight", next);
+        return next;
+      });
+    },
+  });
+
+  // Main GPS geofencing effect - handles stop auto-arrival AND route highlights
   React.useEffect(() => {
-    if (step !== "hunt" || !itinerary?.routeSecrets || activeSecret) return;
+    if (step !== "hunt" || !itinerary) return;
+
+    const isWalking = config.transitMode === "transit";
+    const highlightRadius = isWalking ? 50 : 100; // meters
+    const stopRadius = isWalking ? 80 : 150; // meters
+    const rateLimitMs = 60000; // 1 highlight per minute
 
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
         const userLat = pos.coords.latitude;
         const userLon = pos.coords.longitude;
 
-        itinerary.routeSecrets!.forEach((secret) => {
-          if (discoveredSecrets.includes(secret.name)) return;
-          
-          const [sLat, sLon] = secret.coordinates.split(",").map(Number);
-          if (isNaN(sLat) || isNaN(sLon)) return;
-
-          const distance = calculateDistance(userLat, userLon, sLat, sLon);
-          if (distance < 50) { // 50 meters geofence
-            setDiscoveredSecrets(prev => {
-              const next = [...prev, secret.name];
-              saveToSession("discoveredSecrets", next);
-              return next;
-            });
-            const sData = { name: secret.name, loreSnippet: secret.loreSnippet, lookDirection: secret.lookDirection };
-            setActiveSecret(sData);
-            saveToSession("activeSecret", sData);
-            secretTtsMutation.mutate(secret.loreSnippet); // Fetch audio
+        // 1. Check main stop auto-arrival
+        if (stop && !isStopArrived) {
+          const [stopLat, stopLon] = stop.coordinates.split(",").map(Number);
+          if (!isNaN(stopLat) && !isNaN(stopLon)) {
+            const stopDistance = calculateDistance(userLat, userLon, stopLat, stopLon);
+            if (stopDistance < stopRadius) {
+              setIsStopArrived(true);
+              setArrivalNotification(stop.name);
+              saveToSession("isStopArrived", true);
+              // Auto-dismiss arrival notification after 4 seconds
+              setTimeout(() => setArrivalNotification(null), 4000);
+            }
           }
-        });
+        }
+
+        // 2. Check route highlights (new system)
+        if (itinerary.routeHighlights && !activeHighlight) {
+          const now = Date.now();
+          if (now - lastHighlightTimestamp > rateLimitMs) {
+            for (const highlight of itinerary.routeHighlights) {
+              if (discoveredHighlights.includes(highlight.name)) continue;
+              if (activeSecret) break; // Don't interrupt active secret
+
+              const [hLat, hLon] = highlight.coordinates.split(",").map(Number);
+              if (isNaN(hLat) || isNaN(hLon)) continue;
+
+              const distance = calculateDistance(userLat, userLon, hLat, hLon);
+              if (distance < highlightRadius) {
+                setDiscoveredHighlights(prev => {
+                  const next = [...prev, highlight.name];
+                  saveToSession("discoveredHighlights", next);
+                  return next;
+                });
+                setLastHighlightTimestamp(now);
+
+                const hData = {
+                  name: highlight.name,
+                  type: highlight.type,
+                  narration: highlight.narration,
+                };
+                setActiveHighlight(hData);
+                saveToSession("activeHighlight", hData);
+                highlightTtsMutation.mutate(highlight.narration.script);
+                break; // Only trigger one at a time
+              }
+            }
+          }
+        }
+
+        // 3. Legacy routeSecrets support (backward compatibility)
+        if (itinerary.routeSecrets && !activeSecret && !activeHighlight) {
+          for (const secret of itinerary.routeSecrets) {
+            if (discoveredSecrets.includes(secret.name)) continue;
+
+            const [sLat, sLon] = secret.coordinates.split(",").map(Number);
+            if (isNaN(sLat) || isNaN(sLon)) continue;
+
+            const distance = calculateDistance(userLat, userLon, sLat, sLon);
+            if (distance < 50) {
+              setDiscoveredSecrets(prev => {
+                const next = [...prev, secret.name];
+                saveToSession("discoveredSecrets", next);
+                return next;
+              });
+              const sData = { name: secret.name, loreSnippet: secret.loreSnippet, lookDirection: secret.lookDirection };
+              setActiveSecret(sData);
+              saveToSession("activeSecret", sData);
+              secretTtsMutation.mutate(secret.loreSnippet);
+              break;
+            }
+          }
+        }
       },
       (err) => console.warn("GPS watch err:", err),
       { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [step, itinerary, discoveredSecrets, activeSecret, secretTtsMutation]);
+  }, [step, itinerary, stop, config.transitMode, discoveredSecrets, activeSecret, discoveredHighlights, activeHighlight, lastHighlightTimestamp, isStopArrived, secretTtsMutation, highlightTtsMutation]);
 
   const finalLoreMutation = useMutation({
     mutationFn: async () => {
@@ -489,6 +599,10 @@ export default function App() {
     };
     setProgress(u);
     saveToSession("progress", u);
+    setIsStopArrived(false);
+    saveToSession("isStopArrived", false);
+    setDiscoveredHighlights([]);
+    saveToSession("discoveredHighlights", []);
     setStep("hunt");
     saveToSession("step", "hunt");
   }, [itinerary]);
@@ -501,6 +615,8 @@ export default function App() {
         saveToSession("progress", u);
         return u;
       });
+      setIsStopArrived(false);
+      saveToSession("isStopArrived", false);
       setStep("hunt");
       saveToSession("step", "hunt");
     } else {
@@ -526,6 +642,7 @@ export default function App() {
       analyzing: "hunt",
       lore: "hunt",
       exploration: "lore",
+      narration: "hunt",
       log: "welcome",
       welcome: "welcome",
     };
@@ -568,6 +685,11 @@ export default function App() {
       startTime: null,
       completedAt: null,
     });
+    setIsStopArrived(false);
+    setDiscoveredHighlights([]);
+    setActiveHighlight(null);
+    setDiscoveredSecrets([]);
+    setActiveSecret(null);
     setStep("welcome");
     saveToSession("step", "welcome");
   }, []);
@@ -1118,6 +1240,50 @@ export default function App() {
           </a>
         </div>
 
+        {/* GPS Arrival indicator */}
+        {isStopArrived && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="rounded-xl border p-4 mb-6 flex items-center gap-3"
+            style={{ backgroundColor: t.accentLight + '20', borderColor: t.accent }}
+          >
+            <CheckCircle size={20} style={{ color: t.accent }} />
+            <div className="flex-1">
+              <p className="text-sm font-medium" style={{ color: t.accent }}>
+                You&apos;ve arrived!
+              </p>
+              <p className="text-xs" style={{ color: t.muted }}>
+                GPS confirms you&apos;re at this location
+              </p>
+            </div>
+          </motion.div>
+        )}
+
+        {/* Narration button (when stop has pre-generated narration) */}
+        {stop.narration && (
+          <button
+            onClick={() => {
+              setStep("lore");
+              saveToSession("step", "lore");
+              if (stop.narration?.script) {
+                ttsMutation.mutate(stop.narration.script);
+              }
+            }}
+            className="w-full h-12 rounded-lg font-medium transition-all active:scale-[0.98] flex items-center justify-center gap-2 border mb-6"
+            style={{
+              backgroundColor: t.surface,
+              borderColor: t.accent,
+              color: t.accent,
+            }}
+          >
+            <Volume2 size={16} />
+            {stop.narration.lookDirection
+              ? `View Narration — Look ${stop.narration.lookDirection.toUpperCase()}`
+              : "View Narration"}
+          </button>
+        )}
+
         <div className="flex-1 flex flex-col items-center justify-center gap-6">
           <div
             className="w-full aspect-[3/4] rounded-3xl relative overflow-hidden flex flex-col items-center justify-center border"
@@ -1307,6 +1473,26 @@ export default function App() {
               accent={t.accent}
               border={t.border}
             />
+          )}
+
+          {/* Pre-generated narration with trivia */}
+          {stop.narration && (
+            <div className="space-y-3">
+              {stop.narration.lookDirection && (
+                <div className="flex items-center gap-2 text-sm" style={{ color: t.accent }}>
+                  <Eye size={14} />
+                  <span className="font-medium">Look {stop.narration.lookDirection.toUpperCase()}</span>
+                </div>
+              )}
+              {stop.narration.trivia && (
+                <div className="rounded-lg border p-3" style={{ backgroundColor: t.accentLight + '15', borderColor: t.accentLight }}>
+                  <p className="text-xs font-medium mb-1" style={{ color: t.accent }}>Trivia</p>
+                  <p className="text-xs leading-relaxed" style={{ color: t.muted }}>
+                    {stop.narration.trivia}
+                  </p>
+                </div>
+              )}
+            </div>
           )}
 
           {stop.nearbySpots && stop.nearbySpots.length > 0 && (
@@ -1762,6 +1948,94 @@ export default function App() {
     );
   };
 
+  const renderHighlightModal = () => {
+    if (!activeHighlight) return null;
+    return (
+      <motion.div
+        key="highlight-modal"
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 20 }}
+        className="fixed inset-4 z-[100] flex flex-col items-center justify-center pointer-events-auto"
+      >
+        <div
+          className="absolute inset-[-100vh] bg-black/60 backdrop-blur-sm -z-10"
+          onClick={() => {
+            setActiveHighlight(null);
+            saveToSession("activeHighlight", null);
+          }}
+        />
+        <div
+          className="w-full max-w-sm rounded-2xl border p-6 flex flex-col gap-5 shadow-2xl relative overflow-hidden"
+          style={{ backgroundColor: t.surface, borderColor: t.border }}
+        >
+          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r" style={{ backgroundImage: `linear-gradient(to right, transparent, ${t.accent}, transparent)` }} />
+
+          <div className="text-center space-y-2 relative z-10">
+            <div className="inline-flex items-center justify-center w-14 h-14 rounded-full mb-2 bg-black/20 text-3xl">
+              {highlightIcon(activeHighlight.type)}
+            </div>
+            <p className="text-xs font-mono uppercase tracking-widest" style={{ color: t.accent }}>
+              Point of Interest
+            </p>
+            <h3 className="text-lg font-semibold">{activeHighlight.name}</h3>
+            <div className="flex items-center justify-center gap-2 text-sm" style={{ color: t.muted }}>
+              <Eye size={14} />
+              <span className="font-medium">Look {activeHighlight.narration.lookDirection.toUpperCase()}</span>
+            </div>
+          </div>
+
+          <div className="relative z-10 space-y-3">
+            <p className="text-sm leading-relaxed italic" style={{ color: t.foreground }}>
+              &ldquo;{activeHighlight.narration.script}&rdquo;
+            </p>
+            {activeHighlight.narration.trivia && (
+              <div className="rounded-lg border p-3" style={{ backgroundColor: t.accentLight + '15', borderColor: t.accentLight }}>
+                <p className="text-xs font-medium mb-1" style={{ color: t.accent }}>Trivia</p>
+                <p className="text-xs leading-relaxed" style={{ color: t.muted }}>
+                  {activeHighlight.narration.trivia}
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-3 relative z-10">
+            {activeHighlight.audioUrl ? (
+              <div className="h-12 rounded-lg flex items-center justify-center gap-3 border" style={{ borderColor: t.accentLight, backgroundColor: t.accentLight + '20' }}>
+                <Volume2 size={16} style={{ color: t.accent }} />
+                <audio autoPlay src={activeHighlight.audioUrl} onEnded={() => {
+                  setTimeout(() => {
+                    setActiveHighlight(null);
+                    saveToSession("activeHighlight", null);
+                  }, 3000);
+                }} />
+                <div className="flex gap-1 h-4">
+                  {[...Array(12)].map((_, i) => (
+                    <motion.div key={i} animate={{ height: [2, Math.random() * 12 + 4, 2] }} transition={{ duration: 0.4, repeat: Infinity, delay: i * 0.05 }} className="w-1 rounded-full" style={{ backgroundColor: t.accent }} />
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-center gap-2 h-12 text-xs" style={{ color: t.muted }}>
+                <Loader2 size={14} className="animate-spin" /> Narrating...
+              </div>
+            )}
+            <button
+              onClick={() => {
+                setActiveHighlight(null);
+                saveToSession("activeHighlight", null);
+              }}
+              className="w-full h-12 rounded-lg font-medium transition-all active:scale-[0.98] border"
+              style={{ backgroundColor: t.background, borderColor: t.border }}
+            >
+              Continue Journey
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    );
+  };
+
   return (
     <div
       className="min-h-screen font-sans"
@@ -1809,6 +2083,26 @@ export default function App() {
 
       <AnimatePresence>
         {renderSecretModal()}
+        {renderHighlightModal()}
+      </AnimatePresence>
+
+      {/* Arrival notification */}
+      <AnimatePresence>
+        {arrivalNotification && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="fixed top-16 left-1/2 -translate-x-1/2 z-[90] px-6 py-3 rounded-xl border shadow-lg flex items-center gap-3"
+            style={{ backgroundColor: t.surface, borderColor: t.accent }}
+          >
+            <CheckCircle size={20} style={{ color: t.accent }} />
+            <div>
+              <p className="text-sm font-medium">Arrived!</p>
+              <p className="text-xs" style={{ color: t.muted }}>{arrivalNotification}</p>
+            </div>
+          </motion.div>
+        )}
       </AnimatePresence>
 
       <div className="fixed inset-0 pointer-events-none overflow-hidden z-[-1]">

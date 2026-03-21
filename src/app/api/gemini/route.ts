@@ -3,7 +3,7 @@ import { GoogleGenAI } from "@google/genai";
 
 export async function POST(request: NextRequest) {
   try {
-    const { image, images, vibe, location, groupSize = 1, adventureLog } =
+    const { image, images, vibe, location, groupSize = 1, adventureLog, mode, transitMode } =
       await request.json();
     const apiKey = process.env.GEMINI_API_KEY;
 
@@ -37,6 +37,53 @@ export async function POST(request: NextRequest) {
           result.text ||
           "Your adventure fades into legend, remembered only by the echoes in the alleyways.",
       });
+    }
+
+    // Guided narration mode - generates on-the-fly narration for nearby discoveries
+    if (mode === "guided-narration" && location) {
+      const isWalking = transitMode === "transit";
+      const narrationLength = isWalking
+        ? "4-5 sentences — the user is walking, so they have time for a richer narration"
+        : "2-3 sentences — the user is in a moving vehicle, keep it brief";
+
+      const prompt = `You are "The Urban Alchemist", a guided tour narrator for a ${vibe} urban adventure.
+The user just passed by "${location}" in ${city || "the city"}.
+Travel mode: ${transitMode || "transit"}.
+
+Generate an on-the-fly narration about this place. ${narrationLength}.
+Start with a direction cue (e.g., "Look to your left" or "On your right").
+Describe what makes this place visually or historically notable.
+If you know any trivia (movie filming location, historical event, celebrity connection, architectural fact), include it.
+Keep the tone immersive and ${vibe}.
+
+Return ONLY valid JSON, no markdown fences:
+{
+  "narration": {
+    "script": "Your narration text with direction cue",
+    "lookDirection": "left|right|up|down|around",
+    "trivia": "1-sentence fun fact (optional, can be empty string)"
+  }
+}`;
+
+      const result = await ai.models.generateContent({
+        model,
+        contents: [{ parts: [{ text: prompt }] }],
+      });
+
+      const text = result.text || "";
+      try {
+        const cleaned = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+        const parsed = JSON.parse(cleaned);
+        return NextResponse.json(parsed);
+      } catch {
+        return NextResponse.json({
+          narration: {
+            script: text || `You pass by ${location}. Its presence lingers in the air.`,
+            lookDirection: "around",
+            trivia: "",
+          },
+        });
+      }
     }
 
     if (!vibe || !location) {

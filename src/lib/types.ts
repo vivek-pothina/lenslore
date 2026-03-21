@@ -2,6 +2,9 @@ export type Vibe = 'Cyberpunk' | 'Noir' | 'Fantasy' | 'Historical';
 export type TransitMode = 'transit' | 'car';
 export type MealType = 'breakfast' | 'lunch' | 'dinner' | 'drinks' | 'snacks';
 export type StopType = 'landmark' | 'restaurant' | 'activity';
+export type LookDirection = 'left' | 'right' | 'up' | 'down' | 'around';
+export type HighlightType = 'monument' | 'statue' | 'mural' | 'park' | 'building' | 'landmark';
+export type NarrationDuration = 'short' | 'long';
 
 export const CITIES = ['New York City', 'Boston'] as const;
 export type City = (typeof CITIES)[number];
@@ -30,6 +33,21 @@ export interface NearbySpot {
   shortDescription: string;
 }
 
+export interface NarrationSnippet {
+  script: string;
+  lookDirection: LookDirection;
+  trivia?: string;
+  durationHint: NarrationDuration;
+}
+
+export interface RouteHighlight {
+  name: string;
+  coordinates: string;
+  lookDirection: LookDirection;
+  type: HighlightType;
+  narration: NarrationSnippet;
+}
+
 export interface ItineraryStop {
   id: number;
   name: string;
@@ -38,18 +56,21 @@ export interface ItineraryStop {
   address: string;
   coordinates: string;
   nearbySpots: NearbySpot[];
+  narration?: NarrationSnippet;
 }
 
 export interface Itinerary {
   title: string;
   summary: string;
   stops: ItineraryStop[];
+  routeHighlights?: RouteHighlight[];
   routeSecrets?: {
     name: string;
     coordinates: string;
     lookDirection: string;
     loreSnippet: string;
   }[];
+  transitMode?: TransitMode;
 }
 
 export interface StopProgress {
@@ -75,4 +96,5 @@ export type AppStep =
   | 'analyzing'
   | 'lore'
   | 'exploration'
-  | 'log';
+  | 'log'
+  | 'narration';
