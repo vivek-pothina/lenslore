@@ -738,6 +738,373 @@ export default function App() {
     </motion.div>
   );
 
+  const VIBE_LOADING = {
+    Cyberpunk: { title: "Channeling the void...", subtitle: "Data streams converging" },
+    Noir: { title: "Reading between the lines...", subtitle: "The city reveals its secrets" },
+    Fantasy: { title: "Consulting the ancient tomes...", subtitle: "Arcane knowledge takes form" },
+    Historical: { title: "Consulting the archives...", subtitle: "Records are being unearthed" },
+  } as const;
+
+  const renderVibeLoading = (status: string, snippet?: string) => {
+    const vl = VIBE_LOADING[config.vibe];
+
+    const indicator = (
+      <div className="flex items-center gap-3">
+        <div className="relative">
+          <motion.div
+            animate={{ scale: [1, 1.2, 1] }}
+            transition={{ duration: 1.5, repeat: Infinity }}
+            className="size-3 rounded-full"
+            style={{ backgroundColor: t.accent, boxShadow: `0 0 12px ${t.accentGlow}` }}
+          />
+        </div>
+        <div>
+          <p className="text-sm font-medium" style={{ color: t.accent }}>{status}</p>
+          <p className="text-xs" style={{ color: t.muted }}>{vl.subtitle}</p>
+        </div>
+      </div>
+    );
+
+    if (snippet) {
+      return (
+        <div className="space-y-6">
+          {indicator}
+          {renderStreamingDisplay(snippet)}
+          <div className="flex items-center gap-2 text-xs font-mono uppercase tracking-widest justify-center" style={{ color: t.muted }}>
+            <Loader2 size={12} className="animate-spin" />
+            <span>{snippet.length} chars received</span>
+          </div>
+        </div>
+      );
+    }
+
+    if (config.vibe === "Noir") {
+      return (
+        <div className="flex flex-col items-center justify-center gap-6 py-8">
+          <div className="relative">
+            <div className="size-16 rounded-full border-2 flex items-center justify-center" style={{ borderColor: "#444" }}>
+              <motion.div
+                animate={{ rotate: 360 }}
+                transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                className="size-8 rounded-full border-2 border-t-transparent"
+                style={{ borderColor: "#d4a853", borderTopColor: "transparent" }}
+              />
+            </div>
+            <div className="absolute inset-0 rounded-full" style={{ boxShadow: "0 0 20px rgba(212,168,83,0.1)" }} />
+          </div>
+          {indicator}
+        </div>
+      );
+    }
+
+    if (config.vibe === "Fantasy") {
+      return (
+        <div className="flex flex-col items-center justify-center gap-6 py-8">
+          <motion.div
+            animate={{ rotate: [0, 360] }}
+            transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
+            className="relative"
+          >
+            <Sparkles size={40} style={{ color: t.accent }} />
+            <motion.div
+              animate={{ scale: [1, 1.3, 1], opacity: [0.3, 0.6, 0.3] }}
+              transition={{ duration: 2, repeat: Infinity }}
+              className="absolute inset-0 blur-2xl rounded-full"
+              style={{ backgroundColor: t.accent }}
+            />
+          </motion.div>
+          {indicator}
+        </div>
+      );
+    }
+
+    if (config.vibe === "Historical") {
+      return (
+        <div className="flex flex-col items-center justify-center gap-6 py-8">
+          <div className="relative">
+            <motion.div
+              animate={{ opacity: [0.5, 1, 0.5] }}
+              transition={{ duration: 2, repeat: Infinity }}
+            >
+              <Loader2 size={40} className="animate-spin" style={{ color: t.accent }} />
+            </motion.div>
+          </div>
+          {indicator}
+        </div>
+      );
+    }
+
+    // Cyberpunk default
+    return (
+      <div className="flex flex-col items-center justify-center gap-6 py-8">
+        <div className="relative">
+          <motion.div
+            animate={{ scale: [1, 1.3, 1], opacity: [0.3, 0.6, 0.3] }}
+            transition={{ duration: 2, repeat: Infinity }}
+            className="absolute inset-0 blur-3xl rounded-full"
+            style={{ backgroundColor: t.accent }}
+          />
+          <Loader2 size={48} className="animate-spin relative z-10" style={{ color: t.accent }} />
+        </div>
+        {indicator}
+      </div>
+    );
+  };
+
+  const renderStreamingDisplay = (snippet: string) => {
+    const cursor = (
+      <motion.span
+        animate={{ opacity: [1, 0] }}
+        transition={{ duration: 0.6, repeat: Infinity }}
+        className="inline-block w-2 h-4 ml-0.5 align-middle"
+        style={{ backgroundColor: t.accent }}
+      />
+    );
+
+    if (config.vibe === "Noir") {
+      const noirCursor = (
+        <span
+          className="inline-block w-2 h-4 ml-0.5 align-middle"
+          style={{
+            backgroundColor: "#d4d4d4",
+            boxShadow: "0 0 6px rgba(212,212,212,0.4)",
+          }}
+        >
+          <motion.span
+            className="block w-full h-full"
+            animate={{ opacity: [1, 0] }}
+            transition={{ duration: 0.8, repeat: Infinity }}
+            style={{ backgroundColor: "#d4d4d4" }}
+          />
+        </span>
+      );
+      return (
+        <div
+          className="rounded-xl overflow-hidden relative"
+          style={{
+            backgroundColor: "#0a0a0a",
+            border: "2px solid #333",
+            boxShadow: "inset 0 0 60px rgba(0,0,0,0.5), 0 0 20px rgba(0,0,0,0.3)",
+          }}
+        >
+          <div className="absolute inset-0 pointer-events-none z-10">
+            <div
+              className="absolute inset-0"
+              style={{
+                background:
+                  "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.15) 2px, rgba(0,0,0,0.15) 4px)",
+              }}
+            />
+            <motion.div
+              className="absolute inset-0"
+              style={{
+                background:
+                  "linear-gradient(transparent 50%, rgba(255,255,255,0.02) 50%)",
+                backgroundSize: "100% 4px",
+              }}
+              animate={{ backgroundPositionY: ["0px", "4px"] }}
+              transition={{ duration: 0.1, repeat: Infinity }}
+            />
+          </div>
+          <div
+            className="absolute inset-0 pointer-events-none z-10 rounded-xl"
+            style={{
+              boxShadow: "inset 0 0 80px 20px rgba(0,0,0,0.4)",
+              borderRadius: "inherit",
+            }}
+          />
+          <div className="p-5 font-mono text-xs leading-relaxed max-h-[50vh] overflow-y-auto relative z-0">
+            <div
+              className="text-[10px] mb-3 tracking-widest uppercase"
+              style={{ color: "#666" }}
+            >
+              INTERCEPTING SIGNAL...
+            </div>
+            <pre
+              className="whitespace-pre-wrap break-words"
+              style={{
+                color: "#d4d4d4",
+                textShadow: "0 0 8px rgba(212,168,83,0.15)",
+              }}
+            >
+              {snippet}
+            </pre>
+            {noirCursor}
+          </div>
+        </div>
+      );
+    }
+
+    if (config.vibe === "Fantasy") {
+      return (
+        <div
+          className="rounded-xl overflow-hidden relative"
+          style={{
+            backgroundColor: "#1a1520",
+            border: "2px solid #3d2f50",
+            boxShadow: "0 0 30px rgba(168,85,247,0.08)",
+          }}
+        >
+          <div
+            className="absolute inset-0 pointer-events-none opacity-[0.04]"
+            style={{
+              backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23a855f7' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+            }}
+          />
+          <div
+            className="flex items-center gap-2 px-4 py-2 border-b"
+            style={{ borderColor: "#3d2f50" }}
+          >
+            <Sparkles size={12} style={{ color: "#a855f7" }} />
+            <span
+              className="text-[10px] font-serif italic"
+              style={{ color: "#9b8ec4" }}
+            >
+              The enchanted quill writes...
+            </span>
+          </div>
+          <div className="p-5 max-h-[50vh] overflow-y-auto relative">
+            <pre
+              className="whitespace-pre-wrap break-words font-serif text-sm leading-relaxed italic"
+              style={{ color: "#e8e0f0" }}
+            >
+              {snippet}
+            </pre>
+            <span
+              className="inline-block w-1.5 h-5 ml-0.5 align-middle rounded-full"
+              style={{
+                backgroundColor: "#a855f7",
+                animation: "blink 0.8s step-end infinite",
+                boxShadow: "0 0 8px rgba(168,85,247,0.5)",
+              }}
+            />
+          </div>
+          <div
+            className="h-1"
+            style={{
+              background:
+                "linear-gradient(90deg, transparent, #a855f740, transparent)",
+            }}
+          />
+        </div>
+      );
+    }
+
+    if (config.vibe === "Historical") {
+      return (
+        <div
+          className="rounded-lg overflow-hidden relative"
+          style={{
+            backgroundColor: "#1a170f",
+            border: "1px solid #3d3520",
+            boxShadow: "inset 0 0 40px rgba(0,0,0,0.3)",
+          }}
+        >
+          <div
+            className="absolute inset-0 pointer-events-none opacity-[0.03]"
+            style={{
+              backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4' viewBox='0 0 4 4'%3E%3Cpath fill='%23d97706' fill-opacity='1' d='M1 3h1v1H1V3zm2-2h1v1H3V1z'%3E%3C/path%3E%3C/svg%3E")`,
+            }}
+          />
+          <div
+            className="flex items-center justify-between px-4 py-2 border-b"
+            style={{ borderColor: "#3d352020" }}
+          >
+            <span
+              className="text-[10px] font-mono uppercase tracking-[0.2em]"
+              style={{ color: "#b8a88a" }}
+            >
+              Telegram
+            </span>
+            <span
+              className="text-[10px] font-mono tabular-nums"
+              style={{ color: "#b8a88a60" }}
+            >
+              {new Date().toLocaleDateString("en-US", {
+                month: "short",
+                day: "numeric",
+                year: "numeric",
+              })}
+            </span>
+          </div>
+          <div className="p-5 max-h-[50vh] overflow-y-auto">
+            <div
+              className="text-[10px] font-mono uppercase tracking-widest mb-3 pb-2"
+              style={{
+                color: "#d97706",
+                borderBottom: "1px dashed #3d352030",
+              }}
+            >
+              URGENT DISPATCH — STOP —
+            </div>
+            <pre
+              className="whitespace-pre-wrap break-words font-serif text-sm leading-relaxed"
+              style={{ color: "#f0e6d0" }}
+            >
+              {snippet}
+            </pre>
+            <motion.span
+              animate={{ opacity: [1, 0] }}
+              transition={{ duration: 0.8, repeat: Infinity }}
+              className="inline-block w-1.5 h-4 ml-0.5 align-middle"
+              style={{ backgroundColor: "#d97706" }}
+            />
+          </div>
+          <div
+            className="px-4 py-2 border-t flex items-center justify-between"
+            style={{ borderColor: "#3d352020" }}
+          >
+            <span className="text-[9px] font-mono" style={{ color: "#b8a88a40" }}>
+              CLASSIFIED
+            </span>
+            <div
+              className="size-6 rounded-full border flex items-center justify-center"
+              style={{ borderColor: "#d9770640" }}
+            >
+              <span
+                className="text-[8px] font-bold"
+                style={{ color: "#d9770660" }}
+              >
+                UA
+              </span>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Cyberpunk (default)
+    return (
+      <div
+        className="rounded-xl border overflow-hidden"
+        style={{ backgroundColor: "#0a0a0f", borderColor: t.border }}
+      >
+        <div
+          className="flex items-center gap-2 px-4 py-2 border-b"
+          style={{ borderColor: t.border }}
+        >
+          <div className="flex gap-1.5">
+            <div className="size-2 rounded-full bg-red-500/60" />
+            <div className="size-2 rounded-full bg-yellow-500/60" />
+            <div className="size-2 rounded-full bg-green-500/60" />
+          </div>
+          <span className="text-[10px] font-mono uppercase" style={{ color: t.muted }}>
+            oracle.stream
+          </span>
+        </div>
+        <div className="p-4 font-mono text-xs leading-relaxed max-h-[50vh] overflow-y-auto">
+          <pre
+            className="whitespace-pre-wrap break-words"
+            style={{ color: `${t.foreground}cc` }}
+          >
+            {snippet}
+          </pre>
+          {cursor}
+        </div>
+      </div>
+    );
+  };
+
   const renderPlanning = () => {
     const hasContent = parsed && (parsed.title || parsed.summary || parsed.stops?.length);
     const isThinking = streaming && !hasContent && completion.length > 0;
@@ -781,66 +1148,17 @@ export default function App() {
         )}
 
         {isThinking && (
-          <div className="space-y-6 pt-4">
-            <div className="flex items-center gap-3">
-              <div className="relative">
-                <motion.div
-                  animate={{ scale: [1, 1.2, 1] }}
-                  transition={{ duration: 1.5, repeat: Infinity }}
-                  className="size-3 rounded-full"
-                  style={{ backgroundColor: t.accent, boxShadow: `0 0 12px ${t.accentGlow}` }}
-                />
-              </div>
-              <div>
-                <p className="text-sm font-medium" style={{ color: t.accent }}>
-                  The Oracle is speaking...
-                </p>
-                <p className="text-xs" style={{ color: t.muted }}>
-                  Manifesting your adventure
-                </p>
-              </div>
-            </div>
-
-            <div
-              className="rounded-xl border overflow-hidden"
-              style={{ backgroundColor: "#0a0a0f", borderColor: t.border }}
-            >
-              <div
-                className="flex items-center gap-2 px-4 py-2 border-b"
-                style={{ borderColor: t.border }}
-              >
-                <div className="flex gap-1.5">
-                  <div className="size-2 rounded-full bg-red-500/60" />
-                  <div className="size-2 rounded-full bg-yellow-500/60" />
-                  <div className="size-2 rounded-full bg-green-500/60" />
-                </div>
-                <span className="text-[10px] font-mono uppercase" style={{ color: t.muted }}>
-                  oracle.stream
-                </span>
-              </div>
-              <div className="p-4 font-mono text-xs leading-relaxed max-h-[50vh] overflow-y-auto">
-                <pre
-                  className="whitespace-pre-wrap break-words"
-                  style={{ color: `${t.foreground}cc` }}
-                >
-                  {streamingSnippet}
-                </pre>
-                <motion.span
-                  animate={{ opacity: [1, 0] }}
-                  transition={{ duration: 0.6, repeat: Infinity }}
-                  className="inline-block w-2 h-4 ml-0.5 align-middle"
-                  style={{ backgroundColor: t.accent }}
-                />
-              </div>
-            </div>
-
-            <div
-              className="flex items-center gap-2 text-xs font-mono uppercase tracking-widest justify-center"
-              style={{ color: t.muted }}
-            >
-              <Loader2 size={12} className="animate-spin" />
-              <span>{completion.length} chars received</span>
-            </div>
+          <div className="pt-4">
+            {renderVibeLoading(
+              config.vibe === "Cyberpunk"
+                ? "The Oracle is speaking..."
+                : config.vibe === "Noir"
+                  ? "Intercepting transmissions..."
+                  : config.vibe === "Fantasy"
+                    ? "The enchanted quill stirs..."
+                    : "The telegraph arrives...",
+              streamingSnippet
+            )}
           </div>
         )}
 
@@ -1104,32 +1422,8 @@ export default function App() {
   };
 
   const renderAnalyzing = () => (
-    <div
-      key="analyzing"
-      className="flex-1 flex flex-col items-center justify-center gap-6"
-    >
-      <div className="relative">
-        <motion.div
-          animate={{ scale: [1, 1.2, 1], opacity: [0.3, 0.6, 0.3] }}
-          transition={{ duration: 2, repeat: Infinity }}
-          className="absolute inset-0 blur-3xl rounded-full"
-          style={{ backgroundColor: t.accent }}
-        />
-        <Loader2
-          size={48}
-          className="animate-spin relative z-10"
-          style={{ color: t.accent }}
-        />
-      </div>
-      <div className="text-center space-y-2">
-        <h3 className="text-xl font-medium">Reading the Signs...</h3>
-        <p
-          className="text-sm font-mono uppercase tracking-widest"
-          style={{ color: t.muted }}
-        >
-          {stop?.name}
-        </p>
-      </div>
+    <div key="analyzing" className="flex-1 flex flex-col items-center justify-center">
+      {renderVibeLoading(`Decoding ${stop?.name || "the artifact"}...`)}
     </div>
   );
 
@@ -1389,26 +1683,8 @@ export default function App() {
 
         <div className="flex-1">
           {exploreLoreMutation.isPending && !explorationLore && (
-            <div className="flex flex-col items-center justify-center gap-4 py-12">
-              <div className="relative">
-                <motion.div
-                  animate={{ scale: [1, 1.2, 1], opacity: [0.3, 0.6, 0.3] }}
-                  transition={{ duration: 2, repeat: Infinity }}
-                  className="absolute inset-0 blur-3xl rounded-full"
-                  style={{ backgroundColor: t.accent }}
-                />
-                <Loader2
-                  size={32}
-                  className="animate-spin relative z-10"
-                  style={{ color: t.accent }}
-                />
-              </div>
-              <p
-                className="text-sm font-mono uppercase"
-                style={{ color: t.muted }}
-              >
-                Uncovering secrets...
-              </p>
+            <div className="py-4">
+              {renderVibeLoading("Unearthing secrets...")}
             </div>
           )}
 
@@ -1570,13 +1846,8 @@ export default function App() {
       )}
 
       {finalLoreMutation.isPending && !finalLore && (
-        <div className="flex items-center justify-center gap-3 py-8">
-          <Loader2
-            size={24}
-            className="animate-spin"
-            style={{ color: t.accent }}
-          />
-          <span style={{ color: t.muted }}>Inscribing your legend...</span>
+        <div className="py-4">
+          {renderVibeLoading("Inscribing your legend...")}
         </div>
       )}
 
