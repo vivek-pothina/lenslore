@@ -66,7 +66,9 @@ Priority order (STRICT):
    - Buildings, landmarks, monuments, murals, statues, architectural features.
 2. If #1 is not visible, detect a red parking sign OR red parking garage entrance logo/sign.
 3. If #1 and #2 are not visible, detect a soda can, sparkling water can, or similar drink can.
-4. If none of the above are visible, return [].
+4. If #1-#3 are not visible, detect a coffee mug.
+5. If #1-#4 are not visible, detect a steel glass.
+6. If none of the above are visible, return [].
 
 Return a JSON array with exactly ONE entry for the best detected item:
 {"box_2d": [ymin, xmin, ymax, xmax], "label": "specific name/brand of the object"}
@@ -87,7 +89,9 @@ If no valid target from the priority list is visible, return: []
 Examples:
 [{"box_2d": [50, 100, 900, 800], "label": "Empire State Building"}]
 [{"box_2d": [220, 180, 760, 540], "label": "Red Parking Sign"}]
-[{"box_2d": [280, 360, 660, 560], "label": "Sparkling Water Can"}]`;
+[{"box_2d": [280, 360, 660, 560], "label": "Sparkling Water Can"}]
+[{"box_2d": [300, 340, 700, 620], "label": "Coffee Mug"}]
+[{"box_2d": [260, 420, 760, 610], "label": "Steel Glass"}]`;
 
     console.log("[/api/scan] Calling Gemini for detection...");
 
